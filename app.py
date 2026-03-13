@@ -225,7 +225,6 @@ def login_page():
     .back-button-container button:active {
         transform: scale(0.98) !important;
     }
-    </style>
     
     
     /* ----- 新增卡片样式 ----- */
