@@ -231,7 +231,7 @@ def login_page():
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
         st.markdown('<div class="login-panel">', unsafe_allow_html=True)
-        st.markdown("<style>.login-panel { background-color: rgba(0, 0, 0, 0.70); padding: 2.5rem 2rem 2rem 2rem; border-radius: 20px; box-shadow: 0 4px 20px rgba(0,0,0,0.5); }</style>", unsafe_allow_html=True)
+        st.markdown("<style>.login-panel { background-color: rgba(0, 0, 0, 0.80); padding: 2.5rem 2rem 2rem 2rem; border-radius: 20px; box-shadow: 0 4px 20px rgba(0,0,0,0.5); }</style>", unsafe_allow_html=True)
         
         st.markdown("<h2 style='color: white; text-align: center; margin-bottom: 1.5rem;'>Login / Register</h2>", unsafe_allow_html=True)
         
@@ -254,10 +254,10 @@ def login_page():
         
         with tab2:
             with st.form("register_form"):
-                name = st.text_input("Full Name")  # removed style
-                email = st.text_input("Email")     # removed type and style
-                password = st.text_input("Password", type="password")  # keep type, remove style
-                confirm = st.text_input("Confirm Password", type="password")  # keep type, remove style
+                name = st.text_input("Full Name")  
+                email = st.text_input("Email")    
+                password = st.text_input("Password", type="password") 
+                confirm = st.text_input("Confirm Password", type="password")  
                 submitted = st.form_submit_button("Register")
                 if submitted:
                     if password != confirm:
