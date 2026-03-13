@@ -230,8 +230,7 @@ def login_page():
 
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
-        st.markdown('<div class="login-panel">', unsafe_allow_html=True)
-        
+        st.markdown('<div class="login-panel{background-color: rgba(0, 0, 0, 0.70); padding: 2.5rem 2rem 2rem 2rem; border-radius: 20px; box-shadow: 0 4px 20px rgba(0,0,0,0.5); }">', unsafe_allow_html=True)
         
         st.markdown("<h2 style='color: white; text-align: center; margin-bottom: 1.5rem;'>Login / Register</h2>", unsafe_allow_html=True)
         
