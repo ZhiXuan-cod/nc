@@ -193,7 +193,7 @@ def front_page():
         right_html = """
         <div class="right-panel">
             <h1>Welcome to<br>No-Code ML Platform</h1>
-            <p>Build machine learning models without code.</p>
+            <p>Accessible for Machine Learning without code.</p>
         </div>
         """
         st.markdown(right_html, unsafe_allow_html=True)
@@ -368,7 +368,7 @@ if "test_data" not in st.session_state:
 if "training_complete" not in st.session_state:
     st.session_state.training_complete = False
 if "app_page" not in st.session_state:
-    st.session_state.app_page = "📊 Data Upload"
+    st.session_state.app_page = "📁 Data Upload"
 
 # ---------- 以下是新的功能页面 ----------
 def upload_page():
@@ -387,16 +387,16 @@ def upload_page():
         </ul>
         </div>
         """, unsafe_allow_html=True)
-        uploaded_file = st.file_uploader("Choose a CSV file", type=['csv'])
+        uploaded_file = st.file_uploader("Choose a CSV file", type=['csv'], style='color: white;')
         if uploaded_file is not None:
             try:
                 df = pd.read_csv(uploaded_file)
                 st.session_state.data = df
-                st.success(f"✅ Successfully loaded {len(df)} rows and {len(df.columns)} columns")
+                st.success(f"✔️ Successfully loaded {len(df)} rows and {len(df.columns)} columns", color="white")
                 st.markdown("### Data Preview")
                 st.dataframe(df.head(), use_container_width=True)
                 with st.expander("📊 Basic Data Statistics"):
-                    st.write("**Shape:**", df.shape)
+                    st.write("**Shape:**, style='color: white;'", df.shape)
                     col_types = pd.DataFrame({
                         'Column': df.columns,
                         'Type': df.dtypes.astype(str),
@@ -419,7 +419,7 @@ def upload_page():
         </div>
         """, unsafe_allow_html=True)
         if st.session_state.data is not None:
-            st.markdown("### 📌 Define Target Column")
+            st.markdown("### 📌 Define Target Column", style='color: white;')
             target_col = st.selectbox(
                 "Select the target column:",
                 options=st.session_state.data.columns.tolist(),
