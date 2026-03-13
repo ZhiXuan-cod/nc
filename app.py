@@ -247,10 +247,12 @@ def login_page():
     .form-card .stTextInput label {
         color: white !important;
     }
+    </style>
     """, unsafe_allow_html=True)
 
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2: 
+        st.markdown('<div class="form-card">', unsafe_allow_html=True)
         
         st.markdown("<h2 style='color: white; text-align: center; margin-bottom: 1.5rem;'>Login / Register</h2>", unsafe_allow_html=True)
         
