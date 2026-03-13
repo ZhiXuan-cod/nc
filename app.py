@@ -159,7 +159,7 @@ def front_page():
             st.markdown("""
             <div style="background: rgba(255,255,255,0.2); border-radius: 10px; padding: 2rem; text-align: center;">
                 <span style="font-size: 3rem;">📹</span>
-                <p style="color: white;">视频未找到，请添加 animation.mp4</p>
+                <p style="color: white;">Video not found. Please add animation.mp4</p>
             </div>
             """, unsafe_allow_html=True)
 
@@ -167,7 +167,7 @@ def front_page():
         right_html = """
         <div class="right-panel">
             <h1>Welcome to<br>No-Code ML Platform</h1>
-            <p>Build machine learning models without any code.</p>
+            <p>Build machine learning models without code.</p>
         </div>
         """
         st.markdown(right_html, unsafe_allow_html=True)
@@ -179,7 +179,7 @@ def front_page():
 def login_page():
     set_bg_image_local("FrontPage.jpg")
     
-    # 自定义样式：面板 + 选项卡文字颜色 + 独立返回按钮样式
+    # Custom CSS: style tabs, inputs, and back button
     st.markdown("""
     <style>
     .stTabs [data-baseweb="tab-list"] button {
@@ -190,6 +190,17 @@ def login_page():
         color: white;
         border-bottom-color: #2196F3;
     }
+    /* Style text inputs and labels */
+    .stTextInput input {
+        color: white !important;
+        background-color: rgba(255,255,255,0.1) !important;
+        border: 1px solid rgba(255,255,255,0.3) !important;
+        border-radius: 5px;
+    }
+    .stTextInput label {
+        color: white !important;
+    }
+    /* Style the back button container */
     .back-button-container {
         text-align: center;
         margin-top: 1.5rem;
@@ -228,8 +239,8 @@ def login_page():
         
         with tab1:
             with st.form("login_form"):
-                email = st.text_input("Email", type="email", style="color: white;")
-                password = st.text_input("Password", type="password", style="color: white;")
+                email = st.text_input("Email")  # removed type and style
+                password = st.text_input("Password", type="password")  # keep type="password", remove style
                 submitted = st.form_submit_button("Login")
                 if submitted:
                     success, name = authenticate_user(email, password)
@@ -243,10 +254,10 @@ def login_page():
         
         with tab2:
             with st.form("register_form"):
-                name = st.text_input("Full Name", style="color: white;")
-                email = st.text_input("Email", type="email", style="color: white;")
-                password = st.text_input("Password", type="password", style="color: white;")
-                confirm = st.text_input("Confirm Password", type="password", style="color: white;")
+                name = st.text_input("Full Name")  # removed style
+                email = st.text_input("Email")     # removed type and style
+                password = st.text_input("Password", type="password")  # keep type, remove style
+                confirm = st.text_input("Confirm Password", type="password")  # keep type, remove style
                 submitted = st.form_submit_button("Register")
                 if submitted:
                     if password != confirm:
