@@ -179,10 +179,9 @@ def front_page():
 def login_page():
     set_bg_image_local("FrontPage.jpg")
     
-    # Custom CSS: style tabs, inputs, buttons, and add card/table backgrounds
+    # Custom CSS: style tabs, inputs, and back button
     st.markdown("""
     <style>
-    /* Tabs styling (keep original) */
     .stTabs [data-baseweb="tab-list"] button {
         color: rgba(255,255,255,0.8);
         font-size: 1.1rem;
@@ -191,46 +190,25 @@ def login_page():
         color: white;
         border-bottom-color: #2196F3;
     }
-
-    /* Card container: semi-transparent black background */
-    .form-card {
-        background: rgba(0, 0, 0, 0.7);
-        padding: 2rem;
-        border-radius: 10px;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.3);
-    }
-
-    /* Text inputs: white background, black text */
-    .form-card .stTextInput input {
-        background: white !important;
-        color: black !important;
-        border: 1px solid #ccc !important;
+    /* Style text inputs and labels */
+    .stTextInput input {
+        color: white !important;
+        background-color: rgba(255,255,255,0.1) !important;
+        border: 1px solid rgba(255,255,255,0.3) !important;
         border-radius: 5px;
     }
-
-    /* Input labels: white (visible on dark card) */
-    .form-card .stTextInput label {
+    .stTextInput label {
         color: white !important;
     }
-
-    /* Form submit buttons (Login / Register) */
-    .form-card div[data-testid="stFormSubmitButton"] button {
-        background: white !important;
-        color: black !important;
-        border: 1px solid #ccc !important;
-        border-radius: 5px;
-    }
-
-    /* Back button container */
+    /* Style the back button container */
     .back-button-container {
         text-align: center;
         margin-top: 1.5rem;
     }
-    /* Back button: white background, black text */
     .back-button-container button {
-        background: white !important;
-        color: black !important;
-        border: 1px solid #ccc !important;
+        background: transparent !important;
+        color: rgba(255,255,255,0.9) !important;
+        border: 1px solid rgba(255,255,255,0.3) !important;
         padding: 0.5rem 1.5rem !important;
         border-radius: 50px !important;
         font-size: 1rem !important;
@@ -240,21 +218,39 @@ def login_page():
         box-shadow: none !important;
     }
     .back-button-container button:hover {
-        background: #f0f0f0 !important;
+        background: rgba(255,255,255,0.1) !important;
+        border-color: rgba(255,255,255,0.6) !important;
         transform: scale(1.02) !important;
     }
+    .back-button-container button:active {
+        transform: scale(0.98) !important;
+    }
+    
+    
+    /* ----- 新增卡片样式 ----- */
+    .form-card {
+        background: rgba(0, 0, 0, 0.7);
+        padding: 2rem;
+        border-radius: 10px;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+    }
 
-    /* Tables (if any) get white background */
-    .stDataFrame, .stTable {
+    /* 输入框白色背景，黑色文字 */
+    .form-card .stTextInput input {
         background: white !important;
         color: black !important;
+        border: 1px solid #ccc !important;
+    }
+
+    /* 输入框标签保持白色（在深色卡片上可见） */
+    .form-card .stTextInput label {
+        color: white !important;
     }
     </style>
     """, unsafe_allow_html=True)
 
     col1, col2, col3 = st.columns([1, 2, 1])
-    with col2:
-        # Open the card container
+    with col2: 
         st.markdown('<div class="form-card">', unsafe_allow_html=True)
         
         st.markdown("<h2 style='color: white; text-align: center; margin-bottom: 1.5rem;'>Login / Register</h2>", unsafe_allow_html=True)
@@ -301,9 +297,8 @@ def login_page():
             st.rerun()
         st.markdown('</div>', unsafe_allow_html=True)
         
-        # Close the card container
         st.markdown('</div>', unsafe_allow_html=True)
-        
+
 # ---------- 仪表盘 Dashboard ----------
 def dashboard_page():
     set_bg_image_local("b1.png")
