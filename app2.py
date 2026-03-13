@@ -470,7 +470,7 @@ def eda_page():
     missing_df = missing_df[missing_df['Missing_Count'] > 0]
     if len(missing_df) > 0:
         fig = px.bar(missing_df, x='Column', y='Missing_Percentage',
-                     title="Missing Values by Column (%)", color='Missing_Percentage')
+                    title="Missing Values by Column (%)", color='Missing_Percentage')
         st.plotly_chart(fig, use_container_width=True)
         st.dataframe(missing_df, use_container_width=True)
     else:
@@ -500,11 +500,11 @@ def eda_page():
             col1, col2 = st.columns(2)
             with col1:
                 fig = px.bar(x=value_counts.index, y=value_counts.values,
-                             title=f"Top Categories in {selected_cat_col}")
+                            title=f"Top Categories in {selected_cat_col}")
                 st.plotly_chart(fig, use_container_width=True)
             with col2:
                 fig = px.pie(names=value_counts.index, values=value_counts.values,
-                             title=f"Distribution of {selected_cat_col}")
+                            title=f"Distribution of {selected_cat_col}")
                 st.plotly_chart(fig, use_container_width=True)
 
     if len(numerical_cols) > 1:
@@ -695,18 +695,18 @@ def evaluation_page():
 
         st.markdown("### 📈 Actual vs Predicted")
         fig = px.scatter(x=y_test, y=predictions, labels={'x': 'Actual', 'y': 'Predicted'},
-                         title='Actual vs Predicted Values')
+            title='Actual vs Predicted Values')
         max_val = max(max(y_test), max(predictions))
         min_val = min(min(y_test), min(predictions))
         fig.add_trace(go.Scatter(x=[min_val, max_val], y=[min_val, max_val],
-                                  mode='lines', name='Perfect Prediction',
-                                  line=dict(color='red', dash='dash')))
+                                mode='lines', name='Perfect Prediction',
+                                line=dict(color='red', dash='dash')))
         st.plotly_chart(fig, use_container_width=True)
 
         st.markdown("### 📉 Residual Plot")
         residuals = y_test - predictions
         fig = px.scatter(x=predictions, y=residuals, labels={'x': 'Predicted', 'y': 'Residuals'},
-                         title='Residual Plot')
+                        title='Residual Plot')
         fig.add_hline(y=0, line_dash="dash", line_color="red")
         st.plotly_chart(fig, use_container_width=True)
 
@@ -715,7 +715,7 @@ def evaluation_page():
         st.code(model.fitted_pipeline_, language='python')
         pipeline_code = model.export()
         st.download_button("📥 Download Pipeline Code", data=pipeline_code,
-                           file_name="best_pipeline.py", mime="text/python")
+                        file_name="best_pipeline.py", mime="text/python")
 
 def prediction_page():
     st.markdown('<h2 class="sub-header">🔮 Make Predictions with Trained Model</h2>', unsafe_allow_html=True)
@@ -728,7 +728,7 @@ def prediction_page():
 
     model = st.session_state.model
     method = st.radio("Select prediction method:",
-                      ["📤 Upload New Data", "✍️ Manual Input", "📊 Use Test Data"])
+                    ["📤 Upload New Data", "✍️ Manual Input", "📊 Use Test Data"])
 
     if method == "📤 Upload New Data":
         st.markdown("### 📤 Upload New Data for Prediction")
@@ -814,7 +814,7 @@ def export_page():
             pipeline_code = st.session_state.model.export()
             st.code(pipeline_code, language='python')
             st.download_button("📥 Download Pipeline", data=pipeline_code,
-                               file_name="tpot_pipeline.py", mime="text/python")
+                            file_name="tpot_pipeline.py", mime="text/python")
     with col2:
         st.markdown("#### 📊 Model Report")
         if st.button("Generate Model Report"):
@@ -840,7 +840,7 @@ This model was generated using TPOT AutoML through the No-Code ML Platform.
 """
             st.code(report_content, language='markdown')
             st.download_button("📥 Download Report", data=report_content,
-                               file_name="ml_model_report.md", mime="text/markdown")
+                            file_name="ml_model_report.md", mime="text/markdown")
 
     st.markdown("### 📋 Session Information")
     session_info = {
@@ -864,7 +864,7 @@ This model was generated using TPOT AutoML through the No-Code ML Platform.
 
 # ---------- 仪表盘 Dashboard (重写为完整应用) ----------
 def dashboard_page():
-    set_bg_image_local("b1.png")
+    set_bg_image_local("purple.png")
     st.markdown(f"<h1 style='color: white;'>Welcome, {st.session_state.user_name}!</h1>", unsafe_allow_html=True)
 
     # 侧边栏导航
