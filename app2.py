@@ -305,6 +305,7 @@ def login_page():
         st.markdown('</div>', unsafe_allow_html=True)
 
 # ---------- 新增：额外的CSS样式（用于卡片、标题等）----------
+# ---------- 新增：额外的CSS样式（用于卡片、标题等）----------
 st.markdown("""
 <style>
     .main-header {
@@ -387,16 +388,16 @@ def upload_page():
         </ul>
         </div>
         """, unsafe_allow_html=True)
-        uploaded_file = st.file_uploader("Choose a CSV file", type=['csv'], style='color: white;')
+        uploaded_file = st.file_uploader("Choose a CSV file", type=['csv'])
         if uploaded_file is not None:
             try:
                 df = pd.read_csv(uploaded_file)
                 st.session_state.data = df
-                st.success(f"✔️ Successfully loaded {len(df)} rows and {len(df.columns)} columns", color="white")
+                st.success(f"✔️ Successfully loaded {len(df)} rows and {len(df.columns)} columns")
                 st.markdown("### Data Preview")
                 st.dataframe(df.head(), use_container_width=True)
                 with st.expander("📊 Basic Data Statistics"):
-                    st.write("**Shape:**, style='color: white;'", df.shape)
+                    st.write("**Shape:**", df.shape)
                     col_types = pd.DataFrame({
                         'Column': df.columns,
                         'Type': df.dtypes.astype(str),
@@ -419,7 +420,7 @@ def upload_page():
         </div>
         """, unsafe_allow_html=True)
         if st.session_state.data is not None:
-            st.markdown("### 📌 Define Target Column", style='color: white;')
+            st.markdown("### 📌 Define Target Column")
             target_col = st.selectbox(
                 "Select the target column:",
                 options=st.session_state.data.columns.tolist(),
@@ -540,7 +541,7 @@ def training_page():
     if st.session_state.data is None or st.session_state.target_column is None:
         st.warning("⚠️ Please upload data and set target column first.")
         if st.button("Go to Data Upload"):
-            st.session_state.app_page = "📊 Data Upload"
+            st.session_state.app_page = "📁 Data Upload"
             st.rerun()
         return
     if not tpot_available:
