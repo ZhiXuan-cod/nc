@@ -873,7 +873,7 @@ def dashboard_page():
         st.image("https://cdn-icons-png.flaticon.com/512/2103/2103655.png", width=100)
         st.markdown("### Navigation")
         app_page_options = [
-            "📊 Data Upload",
+            "📁 Data Upload",
             "🔍 Exploratory Analysis",
             "🤖 Model Training",
             "📈 Model Evaluation",
@@ -908,7 +908,7 @@ def dashboard_page():
             st.rerun()
 
     # 主内容区域
-    if st.session_state.app_page == "📊 Data Upload":
+    if st.session_state.app_page == "📁 Data Upload":
         upload_page()
     elif st.session_state.app_page == "🔍 Exploratory Analysis":
         eda_page()
