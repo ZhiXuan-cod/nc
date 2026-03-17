@@ -912,7 +912,7 @@ def dashboard_page():
     st.markdown("""
     <style>
     section[data-testid="stSidebar"] {
-        background: linear-gradient(135deg, #2196F3, #9C27B0) !important;
+        background:#ffffe0 !important;
     }
     section[data-testid="stSidebar"] .css-1d391kg {
         background: transparent !important;
