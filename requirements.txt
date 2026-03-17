@@ -5,5 +5,5 @@ matplotlib
 seaborn
 plotly
 scikit-learn
-tpot
 supabase
+tpot
