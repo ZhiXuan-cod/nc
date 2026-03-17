@@ -552,7 +552,6 @@ def eda_page():
                 st.plotly_chart(fig, use_container_width=True)
 
 def training_page():
-    # Icon changed from 🤖 to 📐
     st.markdown('<h2 class="sub-header">📐 Automated Model Training with TPOT</h2>', unsafe_allow_html=True)
     if st.session_state.data is None or st.session_state.target_column is None:
         st.warning("⚠️ Please upload data and set target column first.")
@@ -930,9 +929,9 @@ def dashboard_page():
 
     # 侧边栏导航
     with st.sidebar:
-        st.image("https://cdn-icons-png.flaticon.com/512/2103/2103655.png", width=100)
-        st.markdown("### Navigation")
-        # Changed icon from 🤖 to 📐
+        st.background_color = "#1E88E5"
+        st.image("https://cdn-icons-png.flaticon.com/512/2103/2103832.png", width=100)
+        st.markdown("### Sequential Steps")
         app_page_options = [
             "📁 Data Upload",
             "🔍 Exploratory Analysis",
@@ -958,7 +957,7 @@ def dashboard_page():
             st.error("⚠️ TPOT not installed. Install with: `pip install tpot`")
             st.code("pip install tpot", language="bash")
 
-        if st.button("🚪 Logout", type="primary"):
+        if st.button("👋🏻 Logout", type="primary"):
             st.session_state.logged_in = False
             st.session_state.user_name = ""
             # 清除所有数据
