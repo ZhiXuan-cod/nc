@@ -1,10 +1,8 @@
 import streamlit as st
-import json
 import os
 import base64
 import pandas as pd
 import numpy as np
-from io import StringIO
 import time
 from datetime import datetime
 import matplotlib.pyplot as plt
@@ -13,12 +11,12 @@ import plotly.express as px
 import plotly.graph_objects as go
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder, StandardScaler
+from sklearn.impute import SimpleImputer
 from sklearn.metrics import (
     accuracy_score, precision_score, recall_score, f1_score,
     confusion_matrix, classification_report,
     mean_absolute_error, mean_squared_error, r2_score
 )
-import pickle
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -46,7 +44,7 @@ if "supabase" not in st.session_state:
         key = st.secrets["supabase"]["key"]
         st.session_state.supabase = create_client(url, key)
     except Exception as e:
-        st.error(f"Supabase Fail Connect: {e}")
+        st.error(f"Supabase connection failed: {e}")
         st.session_state.supabase = None
 
 # ---------- 背景图片（Base64嵌入）----------
@@ -73,7 +71,6 @@ def set_bg_image_local(image_path):
         """
         st.markdown(page_bg_img, unsafe_allow_html=True)
     else:
-        # 如果图片缺失，设置一个渐变色背景作为后备
         fallback_bg = """
         <style>
         .stApp {
@@ -87,18 +84,16 @@ def set_bg_image_local(image_path):
 def register_user(email, password, name):
     """注册新用户到 Supabase"""
     if st.session_state.supabase is None:
-        return False, "Supabase 未连接，无法注册"
+        return False, "Supabase not connected"
     try:
-        # 检查邮箱是否已存在
         response = st.session_state.supabase.table("users").select("*").eq("email", email).execute()
         if len(response.data) > 0:
             return False, "Email already registered."
-        # 插入新用户
         data = {"email": email, "name": name, "password": password}
         st.session_state.supabase.table("users").insert(data).execute()
         return True, "Registration successful. Please log in."
     except Exception as e:
-        return False, f"注册失败: {e}"
+        return False, f"Registration failed: {e}"
 
 def authenticate_user(email, password):
     """验证用户凭据"""
@@ -114,7 +109,7 @@ def authenticate_user(email, password):
         else:
             return False, None
     except Exception as e:
-        st.error(f"验证失败: {e}")
+        st.error(f"Authentication failed: {e}")
         return False, None
 
 # ---------- 页面导航 ----------
@@ -219,7 +214,6 @@ def front_page():
 def login_page():
     set_bg_image_local("login.jpg")
     
-    # Custom CSS: style tabs, inputs, and back button
     st.markdown("""
     <style>
     .stTabs [data-baseweb="tab-list"] button {
@@ -230,7 +224,6 @@ def login_page():
         color: white;
         border-bottom-color: #2196F3;
     }
-    /* Style text inputs and labels */
     .stTextInput input {
         color: black !important;
         background-color: rgba(255,255,255,0.1) !important;
@@ -240,7 +233,6 @@ def login_page():
     .stTextInput label {
         color: black !important;
     }
-    /* Style the back button container */
     .back-button-container {
         text-align: center;
         margin-top: 1.5rem;
@@ -268,8 +260,8 @@ def login_page():
     </style>
     """, unsafe_allow_html=True)
 
-    col1, col2, col3 = st.columns([1, 2, 1])
-    with col2: 
+    col1 = st.columns([1, 1])[0] 
+    with col1: 
         st.markdown('<div class="form-card">', unsafe_allow_html=True)
         
         st.markdown("<h2 style='color: white; text-align: center; margin-bottom: 1.5rem;'>Login / Register</h2>", unsafe_allow_html=True)
@@ -383,6 +375,15 @@ if "training_complete" not in st.session_state:
     st.session_state.training_complete = False
 if "app_page" not in st.session_state:
     st.session_state.app_page = "📁 Data Upload"
+# Additional variables for preprocessing
+if "imputer_num" not in st.session_state:
+    st.session_state.imputer_num = None
+if "imputer_cat" not in st.session_state:
+    st.session_state.imputer_cat = None
+if "num_cols" not in st.session_state:
+    st.session_state.num_cols = None
+if "cat_cols" not in st.session_state:
+    st.session_state.cat_cols = None
 
 # ---------- 以下是新的功能页面 ----------
 def upload_page():
@@ -470,7 +471,6 @@ def eda_page():
         st.metric("Memory (MB)", f"{memory:.2f}")
 
     st.markdown("### 🔍 Data Types")
-    # FIX: Convert dtype objects to strings to avoid JSON serialization error
     dtype_counts = df.dtypes.value_counts()
     dtype_df = pd.DataFrame({
         'Data Type': dtype_counts.index.astype(str),
@@ -595,40 +595,68 @@ def training_page():
     pre_cols = st.columns(3)
     with pre_cols[0]:
         handle_missing = st.selectbox("Handle Missing Values", ["auto", "impute", "drop"])
-    with pre_cols[1]:
-        scale_data = st.checkbox("Scale Numerical Features", value=True)
-    with pre_cols[2]:
-        encode_categorical = st.checkbox("Encode Categorical Features", value=True)
+    # Note: scaling and encoding are now handled by TPOT internally, so we ignore the other options.
 
     if st.button("🚀 Start Automated Training", type="primary", use_container_width=True):
-        with st.spinner("🧪 Preparing data and starting TPOT..."):
+        # Separate features and target
+        X = df.drop(columns=[target_col])
+        y = df[target_col]
+
+        # --- Missing value handling ---
+        if X.isnull().any().any() or y.isnull().any():
+            if handle_missing == "drop":
+                # Drop rows where X or y has missing
+                valid_idx = X.dropna().index.intersection(y.dropna().index)
+                X = X.loc[valid_idx]
+                y = y.loc[valid_idx]
+                st.info(f"Dropped rows with missing values. Remaining: {len(X)} rows.")
+            elif handle_missing in ["auto", "impute"]:
+                # We will impute later with SimpleImputer after split
+                pass
+        else:
+            st.success("No missing values detected.")
+
+        # Identify numerical and categorical columns
+        num_cols = X.select_dtypes(include=[np.number]).columns.tolist()
+        cat_cols = X.select_dtypes(include=['object']).columns.tolist()
+
+        # Store for later use in prediction
+        st.session_state.num_cols = num_cols
+        st.session_state.cat_cols = cat_cols
+
+        # Train/test split
+        X_train, X_test, y_train, y_test = train_test_split(
+            X, y, test_size=test_size, random_state=random_state
+        )
+        st.session_state.test_data = {'X_test': X_test, 'y_test': y_test}
+
+        # --- Imputation (if needed) ---
+        # We'll fit imputers on training data and store them
+        imputer_num = None
+        imputer_cat = None
+        if handle_missing in ["auto", "impute"] and (X_train.isnull().any().any() or y_train.isnull().any()):
+            if num_cols:
+                imputer_num = SimpleImputer(strategy='mean')
+                X_train[num_cols] = imputer_num.fit_transform(X_train[num_cols])
+                X_test[num_cols] = imputer_num.transform(X_test[num_cols])
+            if cat_cols:
+                imputer_cat = SimpleImputer(strategy='most_frequent')
+                X_train[cat_cols] = imputer_cat.fit_transform(X_train[cat_cols])
+                X_test[cat_cols] = imputer_cat.transform(X_test[cat_cols])
+            st.info("Missing values imputed (mean for numerical, mode for categorical).")
+        elif handle_missing == "drop":
+            # Already dropped above, but ensure no missing left
+            pass
+
+        # Store imputers in session state for prediction
+        st.session_state.imputer_num = imputer_num
+        st.session_state.imputer_cat = imputer_cat
+
+        # Prepare categorical feature indices for TPOT
+        cat_indices = [X.columns.get_loc(c) for c in cat_cols if c in X.columns]
+
+        with st.spinner("🧠 TPOT is searching for the best pipeline. This may take several minutes..."):
             try:
-                X = df.drop(columns=[target_col])
-                y = df[target_col]
-
-                if encode_categorical:
-                    categorical_cols = X.select_dtypes(include=['object']).columns
-                    for col in categorical_cols:
-                        le = LabelEncoder()
-                        X[col] = le.fit_transform(X[col].astype(str))
-
-                X_train, X_test, y_train, y_test = train_test_split(
-                    X, y, test_size=test_size, random_state=random_state
-                )
-                st.session_state.test_data = {'X_test': X_test, 'y_test': y_test}
-
-                if scale_data:
-                    scaler = StandardScaler()
-                    X_train = scaler.fit_transform(X_train)
-                    X_test = scaler.transform(X_test)
-
-                progress_bar = st.progress(0)
-                status_text = st.empty()
-                for i in range(100):
-                    progress_bar.progress(i + 1)
-                    status_text.text(f"Initializing... {i+1}%")
-                    time.sleep(0.05)
-
                 if problem_type == "Classification":
                     tpot = TPOTClassifier(
                         generations=generations,
@@ -637,7 +665,8 @@ def training_page():
                         random_state=random_state,
                         verbosity=2,
                         n_jobs=-1,
-                        max_time_mins=max_time_mins
+                        max_time_mins=max_time_mins,
+                        categorical_features=cat_indices if cat_indices else None
                     )
                 else:
                     tpot = TPOTRegressor(
@@ -647,7 +676,8 @@ def training_page():
                         random_state=random_state,
                         verbosity=2,
                         n_jobs=-1,
-                        max_time_mins=max_time_mins
+                        max_time_mins=max_time_mins,
+                        categorical_features=cat_indices if cat_indices else None
                     )
 
                 tpot.fit(X_train, y_train)
@@ -655,8 +685,6 @@ def training_page():
                 st.session_state.predictions = tpot.predict(X_test)
                 st.session_state.training_complete = True
 
-                progress_bar.progress(100)
-                status_text.text("✅ Training complete!")
                 st.success("🎉 Model training completed successfully!")
                 st.balloons()
             except Exception as e:
@@ -755,13 +783,22 @@ def prediction_page():
         if new_file is not None:
             try:
                 new_df = pd.read_csv(new_file)
+                # Ensure columns match training features
                 original_cols = st.session_state.data.drop(columns=[st.session_state.target_column]).columns.tolist()
                 missing_cols = set(original_cols) - set(new_df.columns)
                 if missing_cols:
-                    st.warning(f"⚠️ Missing columns: {missing_cols}")
+                    st.warning(f"⚠️ Missing columns: {missing_cols}. They will be filled with 0.")
                 new_df = new_df.reindex(columns=original_cols, fill_value=0)
+
+                # Apply imputation if any imputers were fitted
+                if st.session_state.imputer_num is not None and st.session_state.num_cols:
+                    new_df[st.session_state.num_cols] = st.session_state.imputer_num.transform(new_df[st.session_state.num_cols])
+                if st.session_state.imputer_cat is not None and st.session_state.cat_cols:
+                    new_df[st.session_state.cat_cols] = st.session_state.imputer_cat.transform(new_df[st.session_state.cat_cols])
+
                 st.markdown("### 📋 Data Preview")
                 st.dataframe(new_df.head(), use_container_width=True)
+
                 if st.button("🔮 Make Predictions", type="primary"):
                     with st.spinner("Making predictions..."):
                         preds = model.predict(new_df)
@@ -783,16 +820,21 @@ def prediction_page():
         cols = st.columns(3)
         for i, col_name in enumerate(feature_cols):
             with cols[i % 3]:
-                if st.session_state.data[col_name].dtype in ['int64', 'float64']:
+                if col_name in st.session_state.num_cols:
                     min_val = float(st.session_state.data[col_name].min())
                     max_val = float(st.session_state.data[col_name].max())
                     mean_val = float(st.session_state.data[col_name].mean())
                     input_data[col_name] = st.number_input(col_name, min_value=min_val, max_value=max_val, value=mean_val)
-                else:
+                else:  # categorical
                     unique_vals = st.session_state.data[col_name].unique()[:10]
                     input_data[col_name] = st.selectbox(col_name, unique_vals)
         if st.button("🔮 Predict", type="primary"):
             input_df = pd.DataFrame([input_data])
+            # Apply imputation (if any)
+            if st.session_state.imputer_num is not None and st.session_state.num_cols:
+                input_df[st.session_state.num_cols] = st.session_state.imputer_num.transform(input_df[st.session_state.num_cols])
+            if st.session_state.imputer_cat is not None and st.session_state.cat_cols:
+                input_df[st.session_state.cat_cols] = st.session_state.imputer_cat.transform(input_df[st.session_state.cat_cols])
             pred = model.predict(input_df)[0]
             st.markdown(f"""
             <div class="success-box">
@@ -805,6 +847,7 @@ def prediction_page():
         if st.session_state.test_data is not None:
             X_test = st.session_state.test_data['X_test']
             y_test = st.session_state.test_data['y_test']
+            # Note: X_test is already preprocessed (imputed) from training, so we can directly predict
             preds = model.predict(X_test)
             comp_df = X_test.copy()
             comp_df['Actual'] = y_test.values
@@ -876,7 +919,9 @@ This model was generated using TPOT AutoML through the No-Code ML Platform.
     st.markdown("### 🔄 Reset Platform")
     st.warning("This will clear all data and models from the current session.")
     if st.button("🔄 Reset All Data", type="secondary"):
-        for key in ["data", "target_column", "problem_type", "model", "predictions", "test_data", "training_complete"]:
+        keys = ["data", "target_column", "problem_type", "model", "predictions", "test_data", "training_complete",
+                "imputer_num", "imputer_cat", "num_cols", "cat_cols"]
+        for key in keys:
             if key in st.session_state:
                 st.session_state[key] = None
         st.rerun()
@@ -919,7 +964,9 @@ def dashboard_page():
             st.session_state.logged_in = False
             st.session_state.user_name = ""
             # 清除所有数据
-            for key in ["data", "target_column", "problem_type", "model", "predictions", "test_data", "training_complete"]:
+            keys = ["data", "target_column", "problem_type", "model", "predictions", "test_data", "training_complete",
+                    "imputer_num", "imputer_cat", "num_cols", "cat_cols"]
+            for key in keys:
                 if key in st.session_state:
                     st.session_state[key] = None
             go_to("front")
