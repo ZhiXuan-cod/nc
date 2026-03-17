@@ -121,6 +121,70 @@ if "user_name" not in st.session_state:
 def go_to(page):
     st.session_state.page = page
 
+# ---------- 全局CSS样式（按钮渐变、卡片等）----------
+st.markdown("""
+<style>
+    .main-header {
+        font-size: 2.5rem;
+        color: #1E88E5;
+        text-align: center;
+        padding: 1rem;
+        margin-bottom: 2rem;
+    }
+    .sub-header {
+        font-size: 1.5rem;
+        color: #3949AB;
+        margin-top: 1.5rem;
+        margin-bottom: 1rem;
+    }
+    .card {
+        background-color: rgba(255,255,255,0.85);
+        border-radius: 10px;
+        padding: 1.5rem;
+        margin-bottom: 1rem;
+        border-left: 5px solid #1E88E5;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    .success-box {
+        background-color: #E8F5E9;
+        border-left: 5px solid #4CAF50;
+        padding: 1rem;
+        border-radius: 5px;
+        margin: 1rem 0;
+    }
+    .warning-box {
+        background-color: #FFF3E0;
+        border-left: 5px solid #FF9800;
+        padding: 1rem;
+        border-radius: 5px;
+        margin: 1rem 0;
+    }
+    .metric-card {
+        background-color: white;
+        border-radius: 10px;
+        padding: 1rem;
+        margin: 0.5rem;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    /* 全局按钮样式：蓝到紫渐变 */
+    div.stButton > button {
+        background: linear-gradient(135deg, #2196F3, #9C27B0) !important;
+        color: white !important;
+        border: none !important;
+        padding: 0.75rem 2rem !important;
+        font-size: 1.2rem !important;
+        border-radius: 50px !important;
+        transition: all 0.3s ease !important;
+        width: 100% !important;
+        margin-top: 1rem !important;
+    }
+    div.stButton > button:hover {
+        transform: scale(1.02) !important;
+        box-shadow: 0 4px 12px rgba(33, 150, 243, 0.4) !important;
+    }
+</style>
+""", unsafe_allow_html=True)
+
 # ---------- 首页 Front Page ----------
 def front_page():
     set_bg_image_local("FrontPage.jpg")
@@ -149,22 +213,6 @@ def front_page():
     @keyframes fadeIn {
         from { opacity: 0; transform: translateY(20px); }
         to { opacity: 1; transform: translateY(0); }
-    }
-    div.stButton > button {
-        background: linear-gradient(135deg, #667eea, #764ba2);
-        color: white;
-        border: none;
-        padding: 0.75rem 2rem;
-        font-size: 1.2rem;
-        border-radius: 50px;
-        transition: all 0.3s ease;
-        width: 100%;
-        margin-top: 1rem;
-    }
-    div.stButton > button:hover {
-        background-color: #1976D2;
-        transform: scale(1.02);
-        box-shadow: 0 4px 12px rgba(33, 150, 243, 0.4);
     }
     .st-emotion-cache-ocqkz7 {
         display: flex;
@@ -208,12 +256,18 @@ def front_page():
             go_to("login")
             st.rerun()
 
-# ---------- 登录/注册页面 ----------
+# ---------- 登录/注册页面（居中）----------
 def login_page():
     set_bg_image_local("login.jpg")
     
     st.markdown("""
     <style>
+    /* 使内容垂直居中 */
+    .stApp {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
     .stTabs [data-baseweb="tab-list"] button {
         color: rgba(255,255,255,0.8);
         font-size: 1.1rem;
@@ -258,10 +312,10 @@ def login_page():
     </style>
     """, unsafe_allow_html=True)
 
-    col1 = st.columns([1, 1])[0] 
-    with col1: 
+    # 三列布局，中间列放置表单实现水平居中
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
         st.markdown('<div class="form-card">', unsafe_allow_html=True)
-        
         st.markdown("<h2 style='color: white; text-align: center; margin-bottom: 1.5rem;'>Login / Register</h2>", unsafe_allow_html=True)
         
         tab1, tab2 = st.tabs(["Login", "Register"])
@@ -308,55 +362,7 @@ def login_page():
         
         st.markdown('</div>', unsafe_allow_html=True)
 
-# ---------- 新增：额外的CSS样式（用于卡片、标题等）----------
-st.markdown("""
-<style>
-    .main-header {
-        font-size: 2.5rem;
-        color: #1E88E5;
-        text-align: center;
-        padding: 1rem;
-        margin-bottom: 2rem;
-    }
-    .sub-header {
-        font-size: 1.5rem;
-        color: #3949AB;
-        margin-top: 1.5rem;
-        margin-bottom: 1rem;
-    }
-    .card {
-        background-color: rgba(255,255,255,0.85);
-        border-radius: 10px;
-        padding: 1.5rem;
-        margin-bottom: 1rem;
-        border-left: 5px solid #1E88E5;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-    }
-    .success-box {
-        background-color: #E8F5E9;
-        border-left: 5px solid #4CAF50;
-        padding: 1rem;
-        border-radius: 5px;
-        margin: 1rem 0;
-    }
-    .warning-box {
-        background-color: #FFF3E0;
-        border-left: 5px solid #FF9800;
-        padding: 1rem;
-        border-radius: 5px;
-        margin: 1rem 0;
-    }
-    .metric-card {
-        background-color: white;
-        border-radius: 10px;
-        padding: 1rem;
-        margin: 0.5rem;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-    }
-</style>
-""", unsafe_allow_html=True)
-
-# ---------- 初始化会话状态（新增变量）----------
+# ---------- 初始化会话状态 ----------
 if "data" not in st.session_state:
     st.session_state.data = None
 if "target_column" not in st.session_state:
@@ -373,7 +379,6 @@ if "training_complete" not in st.session_state:
     st.session_state.training_complete = False
 if "app_page" not in st.session_state:
     st.session_state.app_page = "📁 Data Upload"
-# Additional variables for preprocessing
 if "imputer_num" not in st.session_state:
     st.session_state.imputer_num = None
 if "imputer_cat" not in st.session_state:
@@ -383,9 +388,8 @@ if "num_cols" not in st.session_state:
 if "cat_cols" not in st.session_state:
     st.session_state.cat_cols = None
 
-# ---------- 以下是新的功能页面 ----------
+# ---------- 以下为Dashboard子页面（移除了各自的背景设置，统一使用purple.png）----------
 def upload_page():
-    set_bg_image_local("purple.jpg")
     st.markdown('<h2 class="sub-header">📁 Upload Your Dataset</h2>', unsafe_allow_html=True)
     col1, col2 = st.columns([2, 1])
     with col1:
@@ -590,44 +594,30 @@ def training_page():
         max_time_mins = st.slider("Max Time (minutes)", 1, 60, 10)
         random_state = st.number_input("Random State", 0, 100, 42)
 
-    # Removed unused columns; now a single selectbox for missing value handling
     handle_missing = st.selectbox("Handle Missing Values", ["auto", "impute", "drop"])
 
     if st.button("🚀 Start Automated Training", type="primary", use_container_width=True):
-        # Separate features and target
         X = df.drop(columns=[target_col])
         y = df[target_col]
 
-        # --- Missing value handling ---
         if X.isnull().any().any() or y.isnull().any():
             if handle_missing == "drop":
-                # Drop rows where X or y has missing
                 valid_idx = X.dropna().index.intersection(y.dropna().index)
                 X = X.loc[valid_idx]
                 y = y.loc[valid_idx]
                 st.info(f"Dropped rows with missing values. Remaining: {len(X)} rows.")
-            elif handle_missing in ["auto", "impute"]:
-                # We will impute later with SimpleImputer after split
-                pass
-        else:
-            st.success("No missing values detected.")
 
-        # Identify numerical and categorical columns
         num_cols = X.select_dtypes(include=[np.number]).columns.tolist()
         cat_cols = X.select_dtypes(include=['object']).columns.tolist()
 
-        # Store for later use in prediction
         st.session_state.num_cols = num_cols
         st.session_state.cat_cols = cat_cols
 
-        # Train/test split
         X_train, X_test, y_train, y_test = train_test_split(
             X, y, test_size=test_size, random_state=random_state
         )
         st.session_state.test_data = {'X_test': X_test, 'y_test': y_test}
 
-        # --- Imputation (if needed) ---
-        # We'll fit imputers on training data and store them
         imputer_num = None
         imputer_cat = None
         if handle_missing in ["auto", "impute"] and (X_train.isnull().any().any() or y_train.isnull().any()):
@@ -640,15 +630,10 @@ def training_page():
                 X_train[cat_cols] = imputer_cat.fit_transform(X_train[cat_cols])
                 X_test[cat_cols] = imputer_cat.transform(X_test[cat_cols])
             st.info("Missing values imputed (mean for numerical, mode for categorical).")
-        elif handle_missing == "drop":
-            # Already dropped above, but ensure no missing left
-            pass
 
-        # Store imputers in session state for prediction
         st.session_state.imputer_num = imputer_num
         st.session_state.imputer_cat = imputer_cat
 
-        # Prepare categorical feature indices for TPOT
         cat_indices = [X.columns.get_loc(c) for c in cat_cols if c in X.columns]
 
         with st.spinner("🧠 TPOT is searching for the best pipeline. This may take several minutes..."):
@@ -779,14 +764,12 @@ def prediction_page():
         if new_file is not None:
             try:
                 new_df = pd.read_csv(new_file)
-                # Ensure columns match training features
                 original_cols = st.session_state.data.drop(columns=[st.session_state.target_column]).columns.tolist()
                 missing_cols = set(original_cols) - set(new_df.columns)
                 if missing_cols:
                     st.warning(f"⚠️ Missing columns: {missing_cols}. They will be filled with 0.")
                 new_df = new_df.reindex(columns=original_cols, fill_value=0)
 
-                # Apply imputation if any imputers were fitted
                 if st.session_state.imputer_num is not None and st.session_state.num_cols:
                     new_df[st.session_state.num_cols] = st.session_state.imputer_num.transform(new_df[st.session_state.num_cols])
                 if st.session_state.imputer_cat is not None and st.session_state.cat_cols:
@@ -821,12 +804,11 @@ def prediction_page():
                     max_val = float(st.session_state.data[col_name].max())
                     mean_val = float(st.session_state.data[col_name].mean())
                     input_data[col_name] = st.number_input(col_name, min_value=min_val, max_value=max_val, value=mean_val)
-                else:  # categorical
+                else:
                     unique_vals = st.session_state.data[col_name].unique()[:10]
                     input_data[col_name] = st.selectbox(col_name, unique_vals)
         if st.button("🔮 Predict", type="primary"):
             input_df = pd.DataFrame([input_data])
-            # Apply imputation (if any)
             if st.session_state.imputer_num is not None and st.session_state.num_cols:
                 input_df[st.session_state.num_cols] = st.session_state.imputer_num.transform(input_df[st.session_state.num_cols])
             if st.session_state.imputer_cat is not None and st.session_state.cat_cols:
@@ -838,12 +820,11 @@ def prediction_page():
             </div>
             """, unsafe_allow_html=True)
 
-    else:  # Use Test Data
+    else:
         st.markdown("### 📊 Predictions on Test Data")
         if st.session_state.test_data is not None:
             X_test = st.session_state.test_data['X_test']
             y_test = st.session_state.test_data['y_test']
-            # Note: X_test is already preprocessed (imputed) from training, so we can directly predict
             preds = model.predict(X_test)
             comp_df = X_test.copy()
             comp_df['Actual'] = y_test.values
@@ -922,14 +903,31 @@ This model was generated using TPOT AutoML through the No-Code ML Platform.
                 st.session_state[key] = None
         st.rerun()
 
-# ---------- 仪表盘 Dashboard (重写为完整应用) ----------
+# ---------- 仪表盘 Dashboard ----------
 def dashboard_page():
+    # 设置紫色背景
     set_bg_image_local("purple.png")
+    
+    # 侧边栏渐变样式
+    st.markdown("""
+    <style>
+    section[data-testid="stSidebar"] {
+        background: linear-gradient(135deg, #2196F3, #9C27B0) !important;
+    }
+    section[data-testid="stSidebar"] .css-1d391kg {
+        background: transparent !important;
+    }
+    /* 侧边栏文字颜色设为白色 */
+    section[data-testid="stSidebar"] .st-emotion-cache-1wrcr25, 
+    section[data-testid="stSidebar"] .st-emotion-cache-16txtl3 {
+        color: white !important;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
     st.markdown(f"<h1 style='color: white;'>Welcome, {st.session_state.user_name}!</h1>", unsafe_allow_html=True)
 
-    # 侧边栏导航
     with st.sidebar:
-        st.background_color = "#1E88E5"
         st.image("https://cdn-icons-png.flaticon.com/512/2103/2103832.png", width=100)
         st.markdown("### Sequential Steps")
         app_page_options = [
@@ -960,7 +958,6 @@ def dashboard_page():
         if st.button("👋🏻 Logout", type="primary"):
             st.session_state.logged_in = False
             st.session_state.user_name = ""
-            # 清除所有数据
             keys = ["data", "target_column", "problem_type", "model", "predictions", "test_data", "training_complete",
                     "imputer_num", "imputer_cat", "num_cols", "cat_cols"]
             for key in keys:
