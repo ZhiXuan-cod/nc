@@ -3,5 +3,11 @@ pandas
 numpy
 tpot
 supabase
-bcrypt
-openpyxl
+scikit-learn
+matplotlib
+seaborn
+xgboost
+lightgbm
+catboost
+statsmodels
+joblib
