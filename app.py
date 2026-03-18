@@ -696,8 +696,8 @@ def training_page():
             try:
                 if problem_type == "Classification":
                     tpot = TPOTClassifier(
-                        generations=generations,
-                        population_size=population_size,
+                        generations=5,
+                        population_size=20,
                         cv=cv_folds,
                         random_state=random_state,
                         verbosity=2,
@@ -707,8 +707,8 @@ def training_page():
                     )
                 else:
                     tpot = TPOTRegressor(
-                        generations=generations,
-                        population_size=population_size,
+                        generations=5,
+                        population_size=20,
                         cv=cv_folds,
                         random_state=random_state,
                         verbosity=2,
@@ -718,6 +718,7 @@ def training_page():
                     )
 
                 tpot.fit(X_train, y_train)
+                print(tpot.score(X_test, y_test))
                 st.session_state.model = tpot
                 st.session_state.predictions = tpot.predict(X_test)
                 st.session_state.training_complete = True
