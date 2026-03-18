@@ -319,8 +319,26 @@ def login_page():
     .back-button-container button:active {
         transform: scale(0.98) !important;
     }
+    /* 忘记邮件按钮样式 */
+    .forget-email-btn {
+        background: transparent !important;
+        color: #ff6b6b !important;
+        border: 1px solid #ff6b6b !important;
+        border-radius: 50px !important;
+        padding: 0.25rem 1rem !important;
+        font-size: 0.9rem !important;
+        margin-top: 0.5rem !important;
+        cursor: pointer;
+    }
+    .forget-email-btn:hover {
+        background: rgba(255,107,107,0.1) !important;
+    }
     </style>
     """, unsafe_allow_html=True)
+
+    # 初始化 remembered_email 如果不存在
+    if "remembered_email" not in st.session_state:
+        st.session_state.remembered_email = ""
 
     # 三列布局，中间列放置表单实现水平居中
     col1, col2, col3 = st.columns([1, 2, 1])
@@ -332,14 +350,21 @@ def login_page():
         
         with tab1:
             with st.form("login_form"):
-                email = st.text_input("Email")  
-                password = st.text_input("Password", type="password")  
+                # 如果存在 remembered_email，则作为默认值
+                email = st.text_input("Email", value=st.session_state.remembered_email)
+                password = st.text_input("Password", type="password")
+                remember_me = st.checkbox("Remember my email", value=True if st.session_state.remembered_email else False)
                 submitted = st.form_submit_button("Login")
                 if submitted:
                     success, name = authenticate_user(email, password)
                     if success:
                         st.session_state.logged_in = True
                         st.session_state.user_name = name
+                        # 处理记住邮箱
+                        if remember_me:
+                            st.session_state.remembered_email = email
+                        else:
+                            st.session_state.remembered_email = ""
                         go_to("dashboard")
                         st.rerun()
                     else:
@@ -363,6 +388,14 @@ def login_page():
                             st.success(msg)
                         else:
                             st.error(msg)
+        
+        # 添加“忘记邮箱”按钮（仅当有 remembered_email 时显示）
+        if st.session_state.remembered_email:
+            col_forget, _ = st.columns([1, 3])
+            with col_forget:
+                if st.button("❌ Forget Email", key="forget_email"):
+                    st.session_state.remembered_email = ""
+                    st.rerun()
         
         st.markdown('<div class="back-button-container">', unsafe_allow_html=True)
         if st.button("← Back to Home", key="back_home"):
@@ -1036,6 +1069,7 @@ def dashboard_page():
         if st.button("👋🏻 Logout", type="primary"):
             st.session_state.logged_in = False
             st.session_state.user_name = ""
+            # 不清除 remembered_email，以便下次登录时仍然记住
             keys = ["data", "target_column", "problem_type", "model", "predictions", "test_data", "training_complete",
                     "imputer_num", "imputer_cat", "num_cols", "cat_cols"]
             for key in keys:
