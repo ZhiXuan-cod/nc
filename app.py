@@ -26,7 +26,7 @@ try:
     tpot_available = True
 except ImportError:
     tpot_available = False
-    st.error(f"TPOT is not installed： {e}")
+    st.error(f"TPOT is not installed: {e}")
 
 # ---------- 页面配置 ----------
 st.set_page_config(
