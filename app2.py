@@ -193,14 +193,6 @@ st.markdown("""
         transform: scale(1.02) !important;
         box-shadow: 0 4px 12px rgba(33, 150, 243, 0.4) !important;
     }
-    /* 用于登录页面的卡片样式 */
-    .form-card {
-        background: rgba(0,0,0,0.6);
-        padding: 2rem;
-        border-radius: 15px;
-        backdrop-filter: blur(10px);
-        color: white;
-    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -275,7 +267,7 @@ def front_page():
             go_to("login")
             st.rerun()
 
-# ---------- 登录/注册页面（居中）----------
+# ---------- 登录/注册页面（居中，无“记住邮箱”功能）----------
 def login_page():
     set_bg_image_local("login.jpg")
     
@@ -328,29 +320,11 @@ def login_page():
     .back-button-container button:active {
         transform: scale(0.98) !important;
     }
-    /* 忘记邮件按钮样式 */
-    .forget-email-btn {
-        background: transparent !important;
-        color: #ff6b6b !important;
-        border: 1px solid #ff6b6b !important;
-        border-radius: 50px !important;
-        padding: 0.25rem 1rem !important;
-        font-size: 0.9rem !important;
-        margin-top: 0.5rem !important;
-        cursor: pointer;
-    }
-    .forget-email-btn:hover {
-        background: rgba(255,107,107,0.1) !important;
-    }
     </style>
     """, unsafe_allow_html=True)
 
-    # 初始化 remembered_email 如果不存在
-    if "remembered_email" not in st.session_state:
-        st.session_state.remembered_email = ""
-
     # 三列布局，中间列放置表单实现水平居中
-    _, col2, _ = st.columns([1, 2, 1])   # 仅使用中间列，忽略左右两列
+    _, col2, _ = st.columns([1, 2, 1])
     with col2:
         st.markdown('<div class="form-card">', unsafe_allow_html=True)
         st.markdown("<h2 style='color: white; text-align: center; margin-bottom: 1.5rem;'>Login / Register</h2>", unsafe_allow_html=True)
@@ -359,21 +333,14 @@ def login_page():
         
         with tab1:
             with st.form("login_form"):
-                # 如果存在 remembered_email，则作为默认值
-                email = st.text_input("Email", value=st.session_state.remembered_email)
+                email = st.text_input("Email")
                 password = st.text_input("Password", type="password")
-                remember_me = st.checkbox("Remember my email", value=True if st.session_state.remembered_email else False)
                 submitted = st.form_submit_button("Login")
                 if submitted:
                     success, name = authenticate_user(email, password)
                     if success:
                         st.session_state.logged_in = True
                         st.session_state.user_name = name
-                        # 处理记住邮箱
-                        if remember_me:
-                            st.session_state.remembered_email = email
-                        else:
-                            st.session_state.remembered_email = ""
                         go_to("dashboard")
                         st.rerun()
                     else:
@@ -397,14 +364,6 @@ def login_page():
                             st.success(msg)
                         else:
                             st.error(msg)
-        
-        # 添加“忘记邮箱”按钮（仅当有 remembered_email 时显示）
-        if st.session_state.remembered_email:
-            col_forget, _ = st.columns([1, 3])
-            with col_forget:
-                if st.button("❌ Forget Email", key="forget_email"):
-                    st.session_state.remembered_email = ""
-                    st.rerun()
         
         st.markdown('<div class="back-button-container">', unsafe_allow_html=True)
         if st.button("← Back to Home", key="back_home"):
@@ -591,11 +550,10 @@ def eda_page():
         fig.update_layout(width=800, height=600)
         st.plotly_chart(fig, use_container_width=True)
 
-    # 改进：使用 np.issubdtype 检测数值类型
     if st.session_state.target_column and st.session_state.target_column in df.columns:
         st.markdown(f"### 🎯 Analysis of Target: {st.session_state.target_column}")
         target_col = st.session_state.target_column
-        if np.issubdtype(df[target_col].dtype, np.number):
+        if df[target_col].dtype in ['int64', 'float64']:
             fig = px.histogram(df, x=target_col, title=f"Distribution of Target ({target_col})")
             st.plotly_chart(fig, use_container_width=True)
         else:
@@ -700,14 +658,16 @@ def training_page():
         )
         st.session_state.test_data = {'X_test': X_test, 'y_test': y_test}
 
-        # 处理特征的缺失值（填充）
+        # 预先获取数值列和分类列（用于填充和后续保存）
+        num_cols = X_train.select_dtypes(include=[np.number]).columns.tolist()
+        cat_cols = X_train.select_dtypes(include=['object']).columns.tolist()
         imputer_num = None
         imputer_cat = None
+
+        # 处理特征的缺失值（填充）
         if handle_missing in ["auto", "impute"] and X_train.isnull().any().any():
             X_train = X_train.copy()
             X_test = X_test.copy()
-            num_cols = X_train.select_dtypes(include=[np.number]).columns.tolist()
-            cat_cols = X_train.select_dtypes(include=['object']).columns.tolist()
             if num_cols:
                 imputer_num = SimpleImputer(strategy='mean')
                 X_train.loc[:, num_cols] = imputer_num.fit_transform(X_train[num_cols])
@@ -718,16 +678,11 @@ def training_page():
                 X_test.loc[:, cat_cols] = imputer_cat.transform(X_test[cat_cols])
             st.info("Missing values imputed (mean for numerical, mode for categorical).")
 
-        # 将分类列显式转换为 category 类型，有助于 FLAML 正确处理
-        if cat_cols:
-            for col in cat_cols:
-                X_train[col] = X_train[col].astype('category')
-                X_test[col] = X_test[col].astype('category')
-
+        # 保存填充器和列信息到会话状态
         st.session_state.imputer_num = imputer_num
         st.session_state.imputer_cat = imputer_cat
         st.session_state.num_cols = X_train.select_dtypes(include=[np.number]).columns.tolist()
-        st.session_state.cat_cols = X_train.select_dtypes(include=['category']).columns.tolist()
+        st.session_state.cat_cols = X_train.select_dtypes(include=['object']).columns.tolist()
 
         with st.spinner("🧠 FLAML is searching for the best model. This may take several minutes..."):
             try:
@@ -860,7 +815,6 @@ def prediction_page():
                     st.warning(f"⚠️ Missing columns: {missing_cols}. They will be filled with 0.")
                 new_df = new_df.reindex(columns=original_cols, fill_value=0)
 
-                # 对新数据进行相同的缺失值处理
                 if st.session_state.imputer_num is not None and st.session_state.num_cols:
                     new_df[st.session_state.num_cols] = st.session_state.imputer_num.transform(new_df[st.session_state.num_cols])
                 if st.session_state.imputer_cat is not None and st.session_state.cat_cols:
@@ -1048,7 +1002,6 @@ def dashboard_page():
         if st.button("👋🏻 Logout", type="primary"):
             st.session_state.logged_in = False
             st.session_state.user_name = ""
-            # 不清除 remembered_email，以便下次登录时仍然记住
             keys = ["data", "target_column", "problem_type", "model", "predictions", "test_data", "training_complete",
                     "imputer_num", "imputer_cat", "num_cols", "cat_cols"]
             for key in keys:
