@@ -1,9 +1,7 @@
 streamlit
 pandas
 numpy
-matplotlib
-seaborn
-plotly
-scikit-learn
 supabase
 tpot
+scikit-learn
+setuptools
