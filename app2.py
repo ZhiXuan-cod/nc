@@ -461,6 +461,17 @@ def upload_page():
                 st.session_state.app_page = "🔍 Exploratory Analysis"
                 st.rerun()
 
+    # ---------- 跳转到 EDA 的按钮 ----------
+    st.markdown("---")
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        if st.session_state.data is not None and st.session_state.target_column is not None:
+            if st.button("➡️ Go to Exploratory Analysis", type="primary", use_container_width=True):
+                st.session_state.app_page = "🔍 Exploratory Analysis"
+                st.rerun()
+        else:
+            st.button("➡️ Go to Exploratory Analysis (set target first)", disabled=True, use_container_width=True)
+
 def eda_page():
     st.markdown('<h2 class="sub-header">🔍 Exploratory Data Analysis</h2>', unsafe_allow_html=True)
     if st.session_state.data is None:
@@ -566,10 +577,20 @@ def eda_page():
                 fig = px.pie(names=value_counts.index, values=value_counts.values, title="Class Proportions")
                 st.plotly_chart(fig, use_container_width=True)
 
+    # ---------- 跳转到 Model Training 的按钮 ----------
+    st.markdown("---")
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        if st.session_state.target_column is not None:
+            if st.button("➡️ Go to Model Training", type="primary", use_container_width=True):
+                st.session_state.app_page = "📐 Model Training"
+                st.rerun()
+        else:
+            st.button("➡️ Go to Model Training (set target first)", disabled=True, use_container_width=True)
+
 def training_page():
     st.markdown('<h2 class="sub-header">📐 Automated Model Training with FLAML</h2>', unsafe_allow_html=True)
     
-    # Check if FLAML is available
     if not flaml_available:
         st.error("⚠️ FLAML is not installed. Please install it with `pip install flaml[automl]` to use this feature.")
         if st.button("Go to Data Upload"):
@@ -605,7 +626,6 @@ def training_page():
     if "training_mode" not in st.session_state:
         st.session_state.training_mode = "Balanced"
 
-    # ---------- 训练模式选择（预设值）----------
     col_mode, _ = st.columns([1, 2])
     with col_mode:
         mode = st.selectbox(
@@ -614,7 +634,6 @@ def training_page():
             index=["Fast", "Balanced", "Accurate"].index(st.session_state.training_mode),
             help="快速：时间短；精确：时间长"
         )
-    # 当模式改变时，更新对应的会话状态变量
     if mode != st.session_state.training_mode:
         st.session_state.training_mode = mode
         if mode == "Fast":
@@ -624,7 +643,6 @@ def training_page():
         else:  # Accurate
             st.session_state.train_time = 30
 
-    # ---------- 参数滑块（绑定会话状态）----------
     col1, col2, col3 = st.columns(3)
     with col1:
         test_size = st.slider("Test Size (%)", 10, 40, 20) / 100
@@ -652,19 +670,16 @@ def training_page():
                 y = y.loc[valid_idx].copy()
                 st.warning(f"Dropped rows where target is missing. Remaining: {len(X)} rows.")
 
-        # 分割数据集
         X_train, X_test, y_train, y_test = train_test_split(
             X, y, test_size=test_size, random_state=random_state
         )
         st.session_state.test_data = {'X_test': X_test, 'y_test': y_test}
 
-        # 预先获取数值列和分类列（用于填充和后续保存）
         num_cols = X_train.select_dtypes(include=[np.number]).columns.tolist()
         cat_cols = X_train.select_dtypes(include=['object']).columns.tolist()
         imputer_num = None
         imputer_cat = None
 
-        # 处理特征的缺失值（填充）
         if handle_missing in ["auto", "impute"] and X_train.isnull().any().any():
             X_train = X_train.copy()
             X_test = X_test.copy()
@@ -678,7 +693,6 @@ def training_page():
                 X_test.loc[:, cat_cols] = imputer_cat.transform(X_test[cat_cols])
             st.info("Missing values imputed (mean for numerical, mode for categorical).")
 
-        # 保存填充器和列信息到会话状态
         st.session_state.imputer_num = imputer_num
         st.session_state.imputer_cat = imputer_cat
         st.session_state.num_cols = X_train.select_dtypes(include=[np.number]).columns.tolist()
@@ -693,7 +707,7 @@ def training_page():
                 automl.fit(
                     X_train, y_train,
                     task=task,
-                    time_budget=time_budget_mins * 60,  # 秒
+                    time_budget=time_budget_mins * 60,
                     metric=metric,
                     eval_method='cv',
                     split_ratio=0.2,
@@ -702,12 +716,19 @@ def training_page():
                     verbose=0
                 )
 
-                st.write(f"**Best model found:** {automl.model}")
-                st.write(f"**Best hyperparameters:** {automl.best_config}")
+                # ---------- 清晰展示训练结果 ----------
+                with st.expander("📊 Training Results (click to expand)", expanded=True):
+                    col_res1, col_res2 = st.columns(2)
+                    with col_res1:
+                        st.markdown("#### 🏆 Best Model")
+                        st.code(str(automl.model), language='python')
+                    with col_res2:
+                        st.markdown("#### ⚙️ Best Hyperparameters")
+                        st.json(automl.best_config)
 
-                y_pred = automl.predict(X_test)
-                score = automl.score(X_test, y_test)
-                st.write(f"**Test Score ({metric}):** {score:.4f}")
+                    y_pred = automl.predict(X_test)
+                    score = automl.score(X_test, y_test)
+                    st.markdown(f"#### 📈 Test Score ({metric}): **{score:.4f}**")
 
                 st.session_state.model = automl
                 st.session_state.predictions = y_pred
@@ -715,14 +736,32 @@ def training_page():
 
                 st.success("🎉 Model training completed successfully!")
                 st.balloons()
+
+                # ---------- 跳转到 Model Evaluation 的按钮 ----------
+                col1, col2, col3 = st.columns([1, 2, 1])
+                with col2:
+                    if st.button("➡️ Go to Model Evaluation", type="primary", use_container_width=True):
+                        st.session_state.app_page = "📈 Model Evaluation"
+                        st.rerun()
+
             except Exception as e:
                 st.error(f"❌ Error during training: {str(e)}")
 
 def evaluation_page():
     st.markdown('<h2 class="sub-header">📈 Model Performance Evaluation</h2>', unsafe_allow_html=True)
+    
+    # 检查训练是否完成
     if not st.session_state.training_complete or st.session_state.model is None:
-        st.warning("⚠️ Please train a model first from the 'Model Training' page.")
+        st.warning("⚠️ No trained model found. Please go to 'Model Training' and train a model first.")
         if st.button("Go to Model Training"):
+            st.session_state.app_page = "📐 Model Training"
+            st.rerun()
+        return
+
+    # 检查预测结果和测试数据是否存在
+    if st.session_state.predictions is None or st.session_state.test_data is None:
+        st.error("❌ Model predictions or test data are missing. Please retrain the model.")
+        if st.button("Retrain Model"):
             st.session_state.app_page = "📐 Model Training"
             st.rerun()
         return
@@ -733,98 +772,129 @@ def evaluation_page():
     y_test = test_data['y_test']
     problem_type = st.session_state.problem_type
 
-    # ---------- 数据格式清理 ----------
-    # 转换为 numpy 数组并确保是一维
-    y_test = np.asarray(y_test).ravel()
-    predictions = np.asarray(predictions).ravel()
+    # ---------- 数据格式清理和验证 ----------
+    try:
+        y_test = np.asarray(y_test).ravel()
+        predictions = np.asarray(predictions).ravel()
 
-    # 检查并移除 NaN 或无穷大（如果有）
-    valid_mask = np.isfinite(y_test) & np.isfinite(predictions)
-    if not np.all(valid_mask):
-        st.warning(f"检测到 {np.sum(~valid_mask)} 个无效值（NaN 或无穷大），已自动移除。")
-        y_test = y_test[valid_mask]
-        predictions = predictions[valid_mask]
+        # 检查并移除 NaN 或无穷大
+        valid_mask = np.isfinite(y_test) & np.isfinite(predictions)
+        if not np.all(valid_mask):
+            st.warning(f"检测到 {np.sum(~valid_mask)} 个无效值（NaN 或无穷大），已自动移除。")
+            y_test = y_test[valid_mask]
+            predictions = predictions[valid_mask]
 
-    # 如果移除后没有样本，则报错返回
-    if len(y_test) == 0:
-        st.error("没有有效样本可用于评估。")
-        return
+        if len(y_test) == 0:
+            st.error("没有有效样本可用于评估。请检查数据或重新训练。")
+            return
 
-    # 根据问题类型计算指标
-    if problem_type == "Classification":
-        # 对于分类问题，确保标签类型一致
-        # 如果一个是字符串，另一个是数值，统一转换为字符串进行比较
-        if y_test.dtype.kind in 'iuf' and predictions.dtype.kind in 'iuf':
-            # 两者都是数值，无需转换
-            pass
-        elif y_test.dtype.kind in 'iuf' and predictions.dtype.kind in 'UO':
-            # y_test 是数值，predictions 是字符串，将 predictions 转换为数值（可能失败）
-            try:
-                predictions = predictions.astype(y_test.dtype)
-            except ValueError:
-                st.error("预测值与真实值类型不兼容（数值 vs 字符串），无法计算指标。")
-                return
-        elif y_test.dtype.kind in 'UO' and predictions.dtype.kind in 'iuf':
-            # y_test 是字符串，predictions 是数值，将 predictions 转换为字符串
+        # 分类问题特殊处理：确保标签类型一致
+        if problem_type == "Classification":
+            # 统一转换为字符串进行比较（更安全）
+            y_test = y_test.astype(str)
             predictions = predictions.astype(str)
-        # 如果都是字符串，直接使用
 
-        acc = accuracy_score(y_test, predictions)
-        prec = precision_score(y_test, predictions, average='weighted', zero_division=0)
-        rec = recall_score(y_test, predictions, average='weighted', zero_division=0)
-        f1 = f1_score(y_test, predictions, average='weighted', zero_division=0)
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("Accuracy", f"{acc:.4f}")
-        col2.metric("Precision", f"{prec:.4f}")
-        col3.metric("Recall", f"{rec:.4f}")
-        col4.metric("F1-Score", f"{f1:.4f}")
+            # 检查类别数量是否一致（至少有一个类别）
+            unique_true = np.unique(y_test)
+            unique_pred = np.unique(predictions)
+            if len(unique_true) == 0 or len(unique_pred) == 0:
+                st.error("真实值或预测值中没有任何类别，无法评估。")
+                return
 
-        st.markdown("### 🎯 Confusion Matrix")
-        cm = confusion_matrix(y_test, predictions)
-        fig, ax = plt.subplots(figsize=(8, 6))
-        sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', ax=ax)
-        ax.set_xlabel('Predicted')
-        ax.set_ylabel('Actual')
-        ax.set_title('Confusion Matrix')
-        st.pyplot(fig)
+            # 计算指标
+            acc = accuracy_score(y_test, predictions)
+            prec = precision_score(y_test, predictions, average='weighted', zero_division=0)
+            rec = recall_score(y_test, predictions, average='weighted', zero_division=0)
+            f1 = f1_score(y_test, predictions, average='weighted', zero_division=0)
 
-        st.markdown("### 📝 Detailed Classification Report")
-        report = classification_report(y_test, predictions, output_dict=True, zero_division=0)
-        report_df = pd.DataFrame(report).transpose()
-        st.dataframe(report_df, use_container_width=True)
-    else:
-        # 回归问题
-        mae = mean_absolute_error(y_test, predictions)
-        mse = mean_squared_error(y_test, predictions)
-        rmse = np.sqrt(mse)
-        r2 = r2_score(y_test, predictions)
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("MAE", f"{mae:.4f}")
-        col2.metric("MSE", f"{mse:.4f}")
-        col3.metric("RMSE", f"{rmse:.4f}")
-        col4.metric("R² Score", f"{r2:.4f}")
+            # 展示指标卡片
+            col1, col2, col3, col4 = st.columns(4)
+            col1.metric("Accuracy", f"{acc:.4f}")
+            col2.metric("Precision", f"{prec:.4f}")
+            col3.metric("Recall", f"{rec:.4f}")
+            col4.metric("F1-Score", f"{f1:.4f}")
 
-        st.markdown("### 📈 Actual vs Predicted")
-        fig = px.scatter(x=y_test, y=predictions, labels={'x': 'Actual', 'y': 'Predicted'},
-            title='Actual vs Predicted Values')
-        max_val = max(max(y_test), max(predictions))
-        min_val = min(min(y_test), min(predictions))
-        fig.add_trace(go.Scatter(x=[min_val, max_val], y=[min_val, max_val],
-                                mode='lines', name='Perfect Prediction',
-                                line=dict(color='red', dash='dash')))
-        st.plotly_chart(fig, use_container_width=True)
+            # 混淆矩阵
+            st.markdown("### 🎯 Confusion Matrix")
+            try:
+                cm = confusion_matrix(y_test, predictions)
+                fig, ax = plt.subplots(figsize=(8, 6))
+                sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', ax=ax)
+                ax.set_xlabel('Predicted')
+                ax.set_ylabel('Actual')
+                ax.set_title('Confusion Matrix')
+                st.pyplot(fig)
+            except Exception as e:
+                st.error(f"混淆矩阵生成失败：{e}")
 
-        st.markdown("### 📉 Residual Plot")
-        residuals = y_test - predictions
-        fig = px.scatter(x=predictions, y=residuals, labels={'x': 'Predicted', 'y': 'Residuals'},
-                        title='Residual Plot')
-        fig.add_hline(y=0, line_dash="dash", line_color="red")
-        st.plotly_chart(fig, use_container_width=True)
+            # 分类报告
+            st.markdown("### 📝 Detailed Classification Report")
+            try:
+                report = classification_report(y_test, predictions, output_dict=True, zero_division=0)
+                report_df = pd.DataFrame(report).transpose()
+                st.dataframe(report_df, use_container_width=True)
+            except Exception as e:
+                st.error(f"分类报告生成失败：{e}")
 
-    st.markdown("### 🏆 Best Model Found by FLAML")
-    if model is not None:
-        st.markdown(f"**Model Object:** {model.model}")
-        st.markdown(f"**Best Configuration:** {model.best_config}")
+        else:  # Regression
+            # 确保数值类型
+            y_test = y_test.astype(float)
+            predictions = predictions.astype(float)
+
+            mae = mean_absolute_error(y_test, predictions)
+            mse = mean_squared_error(y_test, predictions)
+            rmse = np.sqrt(mse)
+            r2 = r2_score(y_test, predictions)
+
+            col1, col2, col3, col4 = st.columns(4)
+            col1.metric("MAE", f"{mae:.4f}")
+            col2.metric("MSE", f"{mse:.4f}")
+            col3.metric("RMSE", f"{rmse:.4f}")
+            col4.metric("R² Score", f"{r2:.4f}")
+
+            st.markdown("### 📈 Actual vs Predicted")
+            try:
+                fig = px.scatter(x=y_test, y=predictions, labels={'x': 'Actual', 'y': 'Predicted'},
+                                 title='Actual vs Predicted Values')
+                max_val = max(max(y_test), max(predictions))
+                min_val = min(min(y_test), min(predictions))
+                fig.add_trace(go.Scatter(x=[min_val, max_val], y=[min_val, max_val],
+                                         mode='lines', name='Perfect Prediction',
+                                         line=dict(color='red', dash='dash')))
+                st.plotly_chart(fig, use_container_width=True)
+            except Exception as e:
+                st.error(f"实际vs预测图生成失败：{e}")
+
+            st.markdown("### 📉 Residual Plot")
+            try:
+                residuals = y_test - predictions
+                fig = px.scatter(x=predictions, y=residuals, labels={'x': 'Predicted', 'y': 'Residuals'},
+                                 title='Residual Plot')
+                fig.add_hline(y=0, line_dash="dash", line_color="red")
+                st.plotly_chart(fig, use_container_width=True)
+            except Exception as e:
+                st.error(f"残差图生成失败：{e}")
+
+        # 显示最佳模型信息
+        st.markdown("### 🏆 Best Model Found by FLAML")
+        if model is not None:
+            st.markdown(f"**Model Object:** {model.model}")
+            st.markdown(f"**Best Configuration:** {model.best_config}")
+
+        # ---------- 跳转到 Make Predictions 的按钮 ----------
+        st.markdown("---")
+        col1, col2, col3 = st.columns([1, 2, 1])
+        with col2:
+            if st.session_state.training_complete:
+                if st.button("➡️ Go to Make Predictions", type="primary", use_container_width=True):
+                    st.session_state.app_page = "🔮 Make Predictions"
+                    st.rerun()
+            else:
+                st.button("➡️ Go to Make Predictions (train model first)", disabled=True, use_container_width=True)
+
+    except Exception as e:
+        st.error(f"评估过程中发生未知错误：{str(e)}")
+        st.info("请尝试重新训练模型，或检查数据格式。")
 
 def prediction_page():
     st.markdown('<h2 class="sub-header">🔮 Make Predictions with Trained Model</h2>', unsafe_allow_html=True)
@@ -918,6 +988,17 @@ def prediction_page():
         else:
             st.info("No test data available. Please train a model first.")
 
+    # ---------- 跳转到 Export Results 的按钮 ----------
+    st.markdown("---")
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        if st.session_state.training_complete:
+            if st.button("➡️ Go to Export Results", type="primary", use_container_width=True):
+                st.session_state.app_page = "💾 Export Results"
+                st.rerun()
+        else:
+            st.button("➡️ Go to Export Results (train model first)", disabled=True, use_container_width=True)
+
 def export_page():
     st.markdown('<h2 class="sub-header">💾 Export Model and Results</h2>', unsafe_allow_html=True)
     if not st.session_state.training_complete:
@@ -982,6 +1063,14 @@ This model was generated using FLAML AutoML through the No-Code ML Platform.
             if key in st.session_state:
                 st.session_state[key] = None
         st.rerun()
+
+    # ---------- 跳转到 Data Upload 的按钮 ----------
+    st.markdown("---")
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        if st.button("🔄 Start Over (Back to Data Upload)", type="secondary", use_container_width=True):
+            st.session_state.app_page = "📁 Data Upload"
+            st.rerun()
 
 # ---------- 仪表盘 Dashboard ----------
 def dashboard_page():
