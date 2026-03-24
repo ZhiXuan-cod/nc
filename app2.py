@@ -43,7 +43,7 @@ except ImportError as e:
 st.set_page_config(
     page_title="No-Code ML Platform",
     page_icon="💻",
-    layout="wide",
+    layout="centered",
     initial_sidebar_state="collapsed"
 )
 
@@ -934,13 +934,8 @@ def training_page():
                 st.session_state.training_complete = True
 
                 st.success("🎉 Model training completed successfully!")
-
-                # 跳转到 Model Evaluation 的按钮
-                col1, col2, col3 = st.columns([1, 2, 1])
-                with col2:
-                    if st.button("➡️ Go to Model Evaluation", type="primary", use_container_width=True):
-                        st.session_state.app_page = "📈 Model Evaluation"
-                        st.rerun()
+                st.session_state.app_page = "📈 Model Evaluation"
+                st.rerun()
 
             except Exception as e:
                 st.error(f"❌ Error during training: {str(e)}")
