@@ -1,15 +1,17 @@
 import streamlit as st
 import os
 import base64
+import hashlib
 import pandas as pd  # noqa
 import numpy as np
 from datetime import datetime
+from typing import List
 import matplotlib.pyplot as plt
 import seaborn as sns
 import plotly.express as px
 import plotly.graph_objects as go
 from sklearn.model_selection import train_test_split
-from sklearn.impute import SimpleImputer
+from sklearn.preprocessing import StandardScaler, MinMaxScaler, LabelEncoder, OneHotEncoder
 from sklearn.metrics import (
     accuracy_score, precision_score, recall_score, f1_score,
     confusion_matrix, classification_report,
@@ -20,14 +22,99 @@ warnings.filterwarnings('ignore')
 
 from supabase import create_client  # noqa
 
+# ---------- Minimal PDF generator (no extra installs) ----------
+def _pdf_escape(text: str) -> str:
+    return text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+
+
+def text_to_simple_pdf_bytes(text: str, title: str = "ML Model Report") -> bytes:
+    """
+    Create a simple multi-page PDF containing the given plain text.
+    No third-party dependencies (works on Streamlit free tier).
+    """
+    page_w, page_h = 612, 792  # US Letter points
+    margin_x, margin_y = 54, 54
+    font_size = 10
+    leading = 14
+    max_lines = int((page_h - 2 * margin_y) / leading)
+
+    lines = (text or "").splitlines() or ["(empty report)"]
+    pages = [lines[i:i + max_lines] for i in range(0, len(lines), max_lines)]
+
+    objects: List[bytes] = []
+
+    def add_obj(obj: bytes) -> int:
+        objects.append(obj)
+        return len(objects)  # 1-based object number
+
+    # 1) Catalog (points to Pages obj #2)
+    catalog_obj_num = add_obj(b"<< /Type /Catalog /Pages 2 0 R >>")
+
+    # Reserve slot for Pages object (#2); fill later
+    add_obj(b"<< /Type /Pages /Kids [] /Count 0 >>")
+
+    page_obj_nums: List[int] = []
+    for page_lines in pages:
+        y0 = page_h - margin_y
+        text_ops = [b"BT", b"/F1 %d Tf" % font_size, b"1 0 0 1 %d %d Tm" % (margin_x, y0)]
+        for i, line in enumerate(page_lines):
+            if i > 0:
+                text_ops.append(b"0 -%d Td" % leading)
+            text_ops.append(b"(%s) Tj" % _pdf_escape(line).encode("utf-8"))
+        text_ops.append(b"ET")
+        stream = b"\n".join(text_ops) + b"\n"
+
+        content_obj_num = add_obj(
+            b"<< /Length %d >>\nstream\n" % len(stream) + stream + b"endstream"
+        )
+
+        page_obj = b"".join(
+            [
+                b"<< /Type /Page /Parent 2 0 R ",
+                (b"/MediaBox [0 0 %d %d] " % (page_w, page_h)),
+                b"/Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >> ",
+                (b"/Contents %d 0 R >>" % content_obj_num),
+            ]
+        )
+        page_obj_nums.append(add_obj(page_obj))
+
+    kids = b" ".join([b"%d 0 R" % n for n in page_obj_nums])
+    objects[1] = b"<< /Type /Pages /Kids [ %s ] /Count %d >>" % (kids, len(page_obj_nums))
+
+    info_obj_num = add_obj(b"<< /Title (%s) >>" % _pdf_escape(title).encode("utf-8"))
+
+    header = b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n"
+    body = b""
+    offsets = [0]
+    cur = len(header)
+
+    for i, obj in enumerate(objects, start=1):
+        offsets.append(cur)
+        obj_bytes = b"%d 0 obj\n%s\nendobj\n" % (i, obj)
+        body += obj_bytes
+        cur += len(obj_bytes)
+
+    xref_start = len(header) + len(body)
+    xref = [b"xref\n0 %d\n" % (len(objects) + 1), b"0000000000 65535 f \n"]
+    for off in offsets[1:]:
+        xref.append(b"%010d 00000 n \n" % off)
+    xref_bytes = b"".join(xref)
+
+    trailer = (
+        b"trailer\n<< /Size %d /Root %d 0 R /Info %d 0 R >>\nstartxref\n%d\n%%EOF\n"
+        % (len(objects) + 1, catalog_obj_num, info_obj_num, xref_start)
+    )
+
+    return header + body + xref_bytes + trailer
+
 # ---------- FLAML import with fallback ----------
 try:
     from flaml import AutoML
     flaml_available = True
 except ImportError as e:
     flaml_available = False
-    st.error(f"⚠️ FLAML 导入失败：{e}。请使用 'pip install flaml[automl]' 安装。")
-    # 提供 dummy 类避免 NameError
+    st.error(f"⚠️ FLAML import failed: {e}. Please install with 'pip install flaml[automl]'.")
+    # Provide dummy class to avoid NameError
     class AutoML:
         def __init__(self, **kwargs):
             raise ImportError("FLAML is not installed.")
@@ -38,7 +125,7 @@ except ImportError as e:
         def score(self, X, y):
             return 0.0
 
-# ---------- 页面配置 ----------
+# ---------- Page configuration ----------
 st.set_page_config(
     page_title="No-Code ML Platform",
     page_icon="💻",
@@ -46,7 +133,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# ---------- Supabase 客户端 ----------
+# ---------- Supabase client ----------
 if "supabase" not in st.session_state:
     try:
         url = st.secrets["supabase"]["url"]
@@ -56,7 +143,7 @@ if "supabase" not in st.session_state:
         st.error(f"Supabase connection failed: {e}")
         st.session_state.supabase = None
 
-# ---------- 背景图片（Base64嵌入）----------
+# ---------- Background image (Base64 embedding) ----------
 def get_base64_of_file(file_path):
     try:
         with open(file_path, "rb") as f:
@@ -89,23 +176,63 @@ def set_bg_image_local(image_path):
         """
         st.markdown(fallback_bg, unsafe_allow_html=True)
 
-# ---------- 用户数据存储 (Supabase) ----------
+# ---------- Password hashing helpers ----------
+def hash_password(password: str, iterations: int = 100_000) -> str:
+    """Hash password using PBKDF2-HMAC-SHA256."""
+    salt = os.urandom(16)
+    pwd_hash = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, iterations)
+    return (
+        f"pbkdf2_sha256${iterations}$"
+        f"{base64.b64encode(salt).decode('utf-8')}$"
+        f"{base64.b64encode(pwd_hash).decode('utf-8')}"
+    )
+
+
+def verify_password(plain_password: str, stored_password: str) -> bool:
+    """
+    Verify password and keep backward compatibility.
+    - New format: pbkdf2_sha256$iterations$salt_b64$hash_b64
+    - Legacy format: plain-text password
+    """
+    if not stored_password:
+        return False
+
+    if stored_password.startswith("pbkdf2_sha256$"):
+        try:
+            _, iterations_str, salt_b64, hash_b64 = stored_password.split("$", 3)
+            iterations = int(iterations_str)
+            salt = base64.b64decode(salt_b64.encode("utf-8"))
+            expected_hash = base64.b64decode(hash_b64.encode("utf-8"))
+            candidate_hash = hashlib.pbkdf2_hmac(
+                "sha256",
+                plain_password.encode("utf-8"),
+                salt,
+                iterations,
+            )
+            return candidate_hash == expected_hash
+        except Exception:
+            return False
+
+    # Legacy plain-text fallback (for already-registered users)
+    return stored_password == plain_password
+
+# ---------- User data storage (Supabase) ----------
 def register_user(email, password, name):
-    """注册新用户到 Supabase"""
+    """Register a new user in Supabase"""
     if st.session_state.supabase is None:
         return False, "Supabase not connected"
     try:
         response = st.session_state.supabase.table("users").select("*").eq("email", email).execute()
         if len(response.data) > 0:
             return False, "Email already registered."
-        data = {"email": email, "name": name, "password": password}
+        data = {"email": email, "name": name, "password": hash_password(password)}
         st.session_state.supabase.table("users").insert(data).execute()
         return True, "Registration successful. Please log in."
     except Exception as e:
         return False, f"Registration failed: {e}"
 
 def authenticate_user(email, password):
-    """验证用户凭据"""
+    """Authenticate user credentials"""
     if st.session_state.supabase is None:
         return False, None
     try:
@@ -113,7 +240,7 @@ def authenticate_user(email, password):
         if len(response.data) == 0:
             return False, None
         user = response.data[0]
-        if user["password"] == password:  # 建议生产环境使用密码哈希
+        if verify_password(password, user.get("password", "")):
             return True, user["name"]
         else:
             return False, None
@@ -121,7 +248,7 @@ def authenticate_user(email, password):
         st.error(f"Authentication failed: {e}")
         return False, None
 
-# ---------- 页面导航 ----------
+# ---------- Page navigation ----------
 if "page" not in st.session_state:
     st.session_state.page = "front"
 if "logged_in" not in st.session_state:
@@ -132,7 +259,7 @@ if "user_name" not in st.session_state:
 def go_to(page):
     st.session_state.page = page
 
-# ---------- 全局CSS样式（按钮渐变、卡片等）----------
+# ---------- Global CSS styles (gradient buttons, cards, etc.) ----------
 st.markdown("""
 <style>
     .main-header {
@@ -177,7 +304,7 @@ st.markdown("""
         margin: 0.5rem;
         box-shadow: 0 2px 4px rgba(0,0,0,0.1);
     }
-    /* 全局按钮样式：蓝到紫渐变 */
+    /* Global button style: blue to purple gradient */
     div.stButton > button {
         background: linear-gradient(135deg, #2196F3, #9C27B0) !important;
         color: white !important;
@@ -196,7 +323,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# ---------- 首页 Front Page ----------
+# ---------- Front page ----------
 def front_page():
     set_bg_image_local("FrontPage.jpg")
 
@@ -267,13 +394,13 @@ def front_page():
             go_to("login")
             st.rerun()
 
-# ---------- 登录/注册页面（居中，无“记住邮箱”功能）----------
+# ---------- Login/Register page (centered, no "remember email") ----------
 def login_page():
     set_bg_image_local("login.jpg")
     
     st.markdown("""
     <style>
-    /* 使内容垂直居中 */
+    /* center content vertically */
     .stApp {
         display: flex;
         align-items: center;
@@ -323,7 +450,7 @@ def login_page():
     </style>
     """, unsafe_allow_html=True)
 
-    # 三列布局，中间列放置表单实现水平居中
+    # Three-column layout, middle column for form to center horizontally
     _, col2, _ = st.columns([1, 2, 1])
     with col2:
         st.markdown('<div class="form-card">', unsafe_allow_html=True)
@@ -373,7 +500,7 @@ def login_page():
         
         st.markdown('</div>', unsafe_allow_html=True)
 
-# ---------- 初始化会话状态 ----------
+# ---------- Initialize session state ----------
 if "data" not in st.session_state:
     st.session_state.data = None
 if "target_column" not in st.session_state:
@@ -398,8 +525,11 @@ if "num_cols" not in st.session_state:
     st.session_state.num_cols = None
 if "cat_cols" not in st.session_state:
     st.session_state.cat_cols = None
+# Added: temporary data for data cleaning preview
+if "cleaned_data" not in st.session_state:
+    st.session_state.cleaned_data = None
 
-# ---------- 以下为Dashboard子页面 ----------
+# ---------- Dashboard subpages ----------
 def upload_page():
     st.markdown('<h2 class="sub-header">📁 Upload Your Dataset</h2>', unsafe_allow_html=True)
     col1, col2 = st.columns([2, 1])
@@ -458,8 +588,180 @@ def upload_page():
                 st.session_state.target_column = target_col
                 st.session_state.problem_type = problem_type
                 st.success(f"✅ Target set: {target_col} ({problem_type})")
+                st.session_state.app_page = "🧹 Data Cleaning"  # Jump to cleaning page
+                st.rerun()
+
+    # ---------- Button to go to cleaning page ----------
+    st.markdown("---")
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        if st.session_state.data is not None and st.session_state.target_column is not None:
+            if st.button("➡️ Go to Data Cleaning", type="primary", use_container_width=True):
+                st.session_state.app_page = "🧹 Data Cleaning"
+                st.rerun()
+        else:
+            st.button("➡️ Go to Data Cleaning (set target first)", disabled=True, use_container_width=True)
+
+# ---------- New data cleaning page ----------
+def cleaning_page():
+    st.markdown('<h2 class="sub-header">🧹 Data Cleaning</h2>', unsafe_allow_html=True)
+    
+    if st.session_state.data is None:
+        st.warning("⚠️ Please upload data first from the 'Data Upload' page.")
+        if st.button("Go to Data Upload"):
+            st.session_state.app_page = "📁 Data Upload"
+            st.rerun()
+        return
+
+    original_df = st.session_state.data
+    st.markdown("### Original Data Preview")
+    st.dataframe(original_df.head())
+    st.markdown(f"Shape: {original_df.shape}")
+
+    # Cleaning options container
+    with st.expander("Cleaning Options", expanded=True):
+        # 1. Drop duplicate rows
+        drop_duplicates = st.checkbox("Drop duplicate rows")
+        
+        # 2. Handle missing values
+        missing_option = st.selectbox(
+            "Handle missing values",
+            ["None", "Drop rows with any missing", "Drop columns with any missing", 
+             "Fill numeric with mean", "Fill numeric with median", "Fill categorical with mode"]
+        )
+        
+        # 3. Handle outliers (numerical columns)
+        outlier_option = st.selectbox(
+            "Handle outliers (numerical columns)",
+            ["None", "Remove rows with Z-score > 3", "Cap at 1st and 99th percentile"]
+        )
+        
+        # 4. Feature encoding
+        encode_option = st.selectbox(
+            "Categorical encoding",
+            ["None", "Label Encoding", "One-Hot Encoding"]
+        )
+        
+        # 5. Feature scaling
+        scale_option = st.selectbox(
+            "Feature scaling (numerical)",
+            ["None", "Standardization (z-score)", "Normalization (min-max)"]
+        )
+        
+        # 6. Drop columns
+        cols_to_drop = st.multiselect("Select columns to drop", original_df.columns.tolist())
+        
+        # Preview button
+        if st.button("🔍 Preview Cleaning", type="secondary"):
+            cleaned = original_df.copy()
+            
+            # 1. Drop duplicate rows
+            if drop_duplicates:
+                cleaned = cleaned.drop_duplicates()
+                st.info(f"Dropped duplicates, new shape: {cleaned.shape}")
+            
+            # 2. Handle missing values
+            if missing_option != "None":
+                if missing_option == "Drop rows with any missing":
+                    cleaned = cleaned.dropna()
+                    st.info(f"Dropped rows with missing values, new shape: {cleaned.shape}")
+                elif missing_option == "Drop columns with any missing":
+                    cleaned = cleaned.dropna(axis=1)
+                    st.info(f"Dropped columns with missing values, new shape: {cleaned.shape}")
+                elif missing_option == "Fill numeric with mean":
+                    num_cols = cleaned.select_dtypes(include=[np.number]).columns
+                    for col in num_cols:
+                        cleaned[col] = cleaned[col].fillna(cleaned[col].mean())
+                    st.info("Filled numeric missing values with mean.")
+                elif missing_option == "Fill numeric with median":
+                    num_cols = cleaned.select_dtypes(include=[np.number]).columns
+                    for col in num_cols:
+                        cleaned[col] = cleaned[col].fillna(cleaned[col].median())
+                    st.info("Filled numeric missing values with median.")
+                elif missing_option == "Fill categorical with mode":
+                    cat_cols = cleaned.select_dtypes(include=['object']).columns
+                    for col in cat_cols:
+                        cleaned[col] = cleaned[col].fillna(cleaned[col].mode()[0] if not cleaned[col].mode().empty else "Unknown")
+                    st.info("Filled categorical missing values with mode.")
+            
+            # 3. Handle outliers
+            if outlier_option != "None":
+                num_cols = cleaned.select_dtypes(include=[np.number]).columns
+                if outlier_option == "Remove rows with Z-score > 3":
+                    from scipy import stats
+                    if len(num_cols) == 0:
+                        st.warning("No numerical columns found for outlier removal.")
+                    else:
+                        numeric_subset = cleaned[num_cols].dropna()
+                        if numeric_subset.empty:
+                            st.warning("No complete numerical rows available for Z-score outlier removal.")
+                        else:
+                            z_scores = np.abs(stats.zscore(numeric_subset, nan_policy='omit'))
+                            if np.ndim(z_scores) == 1:
+                                z_scores = z_scores.reshape(-1, 1)
+                            threshold = 3
+                            outlier_rows = (z_scores > threshold).any(axis=1)
+                            outlier_idx = numeric_subset.index[outlier_rows]
+                            cleaned = cleaned.drop(index=outlier_idx)
+                            st.info(f"Removed rows with Z-score > 3, new shape: {cleaned.shape}")
+                elif outlier_option == "Cap at 1st and 99th percentile":
+                    for col in num_cols:
+                        q1 = cleaned[col].quantile(0.01)
+                        q99 = cleaned[col].quantile(0.99)
+                        cleaned[col] = cleaned[col].clip(lower=q1, upper=q99)
+                    st.info("Capped outliers at 1st and 99th percentiles.")
+            
+            # 4. Encoding
+            if encode_option != "None":
+                cat_cols = cleaned.select_dtypes(include=['object']).columns
+                if len(cat_cols) > 0:
+                    if encode_option == "Label Encoding":
+                        for col in cat_cols:
+                            le = LabelEncoder()
+                            cleaned[col] = le.fit_transform(cleaned[col].astype(str))
+                        st.info("Applied Label Encoding to categorical columns.")
+                    elif encode_option == "One-Hot Encoding":
+                        cleaned = pd.get_dummies(cleaned, columns=cat_cols, drop_first=True)
+                        st.info("Applied One-Hot Encoding to categorical columns.")
+            
+            # 5. Scaling
+            if scale_option != "None":
+                num_cols = cleaned.select_dtypes(include=[np.number]).columns
+                if len(num_cols) > 0:
+                    if scale_option == "Standardization (z-score)":
+                        scaler = StandardScaler()
+                        cleaned[num_cols] = scaler.fit_transform(cleaned[num_cols])
+                        st.info("Applied Standardization to numerical columns.")
+                    elif scale_option == "Normalization (min-max)":
+                        scaler = MinMaxScaler()
+                        cleaned[num_cols] = scaler.fit_transform(cleaned[num_cols])
+                        st.info("Applied Min-Max Normalization to numerical columns.")
+            
+            # 6. Drop columns
+            if cols_to_drop:
+                cleaned = cleaned.drop(columns=cols_to_drop)
+                st.info(f"Dropped selected columns, new shape: {cleaned.shape}")
+            
+            st.markdown("### Cleaned Data Preview")
+            st.dataframe(cleaned.head())
+            st.markdown(f"Final shape: {cleaned.shape}")
+            
+            # Save to temporary session state
+            st.session_state.cleaned_data = cleaned
+
+    # Apply cleaning and continue
+    st.markdown("---")
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        if st.session_state.cleaned_data is not None:
+            if st.button("✅ Apply Cleaning and Continue", type="primary", use_container_width=True):
+                st.session_state.data = st.session_state.cleaned_data
+                st.session_state.cleaned_data = None
+                st.success("Data cleaned successfully!")
                 st.session_state.app_page = "🔍 Exploratory Analysis"
                 st.rerun()
+        else:
+            st.button("✅ Apply Cleaning (preview first)", disabled=True, use_container_width=True)
 
 def eda_page():
     st.markdown('<h2 class="sub-header">🔍 Exploratory Data Analysis</h2>', unsafe_allow_html=True)
@@ -566,10 +868,20 @@ def eda_page():
                 fig = px.pie(names=value_counts.index, values=value_counts.values, title="Class Proportions")
                 st.plotly_chart(fig, use_container_width=True)
 
+    # Button to go to Model Training
+    st.markdown("---")
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        if st.session_state.target_column is not None:
+            if st.button("➡️ Go to Model Training", type="primary", use_container_width=True):
+                st.session_state.app_page = "📐 Model Training"
+                st.rerun()
+        else:
+            st.button("➡️ Go to Model Training (set target first)", disabled=True, use_container_width=True)
+
 def training_page():
     st.markdown('<h2 class="sub-header">📐 Automated Model Training with FLAML</h2>', unsafe_allow_html=True)
     
-    # Check if FLAML is available
     if not flaml_available:
         st.error("⚠️ FLAML is not installed. Please install it with `pip install flaml[automl]` to use this feature.")
         if st.button("Go to Data Upload"):
@@ -599,22 +911,20 @@ def training_page():
     </div>
     """, unsafe_allow_html=True)
 
-    # ---------- 初始化会话状态变量（用于绑定滑块）----------
+    # ---------- Initialize session state variables (for sliders) ----------
     if "train_time" not in st.session_state:
         st.session_state.train_time = 10
     if "training_mode" not in st.session_state:
         st.session_state.training_mode = "Balanced"
 
-    # ---------- 训练模式选择（预设值）----------
     col_mode, _ = st.columns([1, 2])
     with col_mode:
         mode = st.selectbox(
             "Training Mode Preset",
             ["Fast", "Balanced", "Accurate"],
             index=["Fast", "Balanced", "Accurate"].index(st.session_state.training_mode),
-            help="快速：时间短；精确：时间长"
+            help="Fast: short time; Accurate: longer time"
         )
-    # 当模式改变时，更新对应的会话状态变量
     if mode != st.session_state.training_mode:
         st.session_state.training_mode = mode
         if mode == "Fast":
@@ -624,7 +934,6 @@ def training_page():
         else:  # Accurate
             st.session_state.train_time = 30
 
-    # ---------- 参数滑块（绑定会话状态）----------
     col1, col2, col3 = st.columns(3)
     with col1:
         test_size = st.slider("Test Size (%)", 10, 40, 20) / 100
@@ -633,54 +942,19 @@ def training_page():
     with col3:
         random_state = st.number_input("Random State", 0, 100, 42)
 
-    handle_missing = st.selectbox("Handle Missing Values", ["auto", "impute", "drop"])
-
     if st.button("🚀 Start Automated Training", type="primary", use_container_width=True):
         X = df.drop(columns=[target_col])
         y = df[target_col]
 
-        # 统一处理缺失值（包括目标变量）
-        if handle_missing == "drop":
-            valid_idx = X.dropna().index.intersection(y.dropna().index)
-            X = X.loc[valid_idx].copy()
-            y = y.loc[valid_idx].copy()
-            st.info(f"Dropped rows with missing values. Remaining: {len(X)} rows.")
-        elif handle_missing in ["auto", "impute"]:
-            if y.isnull().any():
-                valid_idx = y.dropna().index
-                X = X.loc[valid_idx].copy()
-                y = y.loc[valid_idx].copy()
-                st.warning(f"Dropped rows where target is missing. Remaining: {len(X)} rows.")
-
-        # 分割数据集
         X_train, X_test, y_train, y_test = train_test_split(
             X, y, test_size=test_size, random_state=random_state
         )
         st.session_state.test_data = {'X_test': X_test, 'y_test': y_test}
 
-        # 预先获取数值列和分类列（用于填充和后续保存）
         num_cols = X_train.select_dtypes(include=[np.number]).columns.tolist()
         cat_cols = X_train.select_dtypes(include=['object']).columns.tolist()
-        imputer_num = None
-        imputer_cat = None
-
-        # 处理特征的缺失值（填充）
-        if handle_missing in ["auto", "impute"] and X_train.isnull().any().any():
-            X_train = X_train.copy()
-            X_test = X_test.copy()
-            if num_cols:
-                imputer_num = SimpleImputer(strategy='mean')
-                X_train.loc[:, num_cols] = imputer_num.fit_transform(X_train[num_cols])
-                X_test.loc[:, num_cols] = imputer_num.transform(X_test[num_cols])
-            if cat_cols:
-                imputer_cat = SimpleImputer(strategy='most_frequent')
-                X_train.loc[:, cat_cols] = imputer_cat.fit_transform(X_train[cat_cols])
-                X_test.loc[:, cat_cols] = imputer_cat.transform(X_test[cat_cols])
-            st.info("Missing values imputed (mean for numerical, mode for categorical).")
-
-        # 保存填充器和列信息到会话状态
-        st.session_state.imputer_num = imputer_num
-        st.session_state.imputer_cat = imputer_cat
+        st.session_state.imputer_num = None
+        st.session_state.imputer_cat = None
         st.session_state.num_cols = X_train.select_dtypes(include=[np.number]).columns.tolist()
         st.session_state.cat_cols = X_train.select_dtypes(include=['object']).columns.tolist()
 
@@ -688,41 +962,62 @@ def training_page():
             try:
                 task = 'classification' if problem_type == 'Classification' else 'regression'
                 metric = 'accuracy' if task == 'classification' else 'r2'
+                estimator_list = (
+                    ["lgbm", "rf", "lrl1"] if task == "classification" else ["lgbm", "rf", "lrl2"]
+                )
 
                 automl = AutoML()
                 automl.fit(
                     X_train, y_train,
                     task=task,
-                    time_budget=time_budget_mins * 60,  # 秒
+                    time_budget=time_budget_mins * 60,
                     metric=metric,
-                    eval_method='cv',
+                    eval_method='holdout',
                     split_ratio=0.2,
+                    estimator_list=estimator_list,
                     n_jobs=-1,
                     log_file_name='flaml.log',
                     verbose=0
                 )
 
-                st.write(f"**Best model found:** {automl.model}")
-                st.write(f"**Best hyperparameters:** {automl.best_config}")
+                # Display training results clearly
+                with st.expander("📊 Training Results (click to expand)", expanded=True):
+                    col_res1, col_res2 = st.columns(2)
+                    with col_res1:
+                        st.markdown("#### 🏆 Best Model")
+                        st.code(str(automl.model), language='python')
+                    with col_res2:
+                        st.markdown("#### ⚙️ Best Hyperparameters")
+                        st.json(automl.best_config)
 
-                y_pred = automl.predict(X_test)
-                score = automl.score(X_test, y_test)
-                st.write(f"**Test Score ({metric}):** {score:.4f}")
+                    y_pred = automl.predict(X_test)
+                    score = automl.score(X_test, y_test)
+                    st.markdown(f"#### 📈 Test Score ({metric}): **{score:.4f}**")
 
                 st.session_state.model = automl
                 st.session_state.predictions = y_pred
                 st.session_state.training_complete = True
 
                 st.success("🎉 Model training completed successfully!")
-                st.balloons()
+                st.session_state.app_page = "📈 Model Evaluation"
+                st.rerun()
+
             except Exception as e:
                 st.error(f"❌ Error during training: {str(e)}")
 
 def evaluation_page():
     st.markdown('<h2 class="sub-header">📈 Model Performance Evaluation</h2>', unsafe_allow_html=True)
+    
     if not st.session_state.training_complete or st.session_state.model is None:
-        st.warning("⚠️ Please train a model first from the 'Model Training' page.")
+        st.warning("⚠️ No trained model found. Please go to 'Model Training' and train a model first.")
         if st.button("Go to Model Training"):
+            st.session_state.app_page = "📐 Model Training"
+            st.rerun()
+        return
+
+    if st.session_state.predictions is None or st.session_state.test_data is None:
+        st.error("❌ Model predictions or test data are missing. Please retrain the model.")
+        if st.button("Retrain Model"):
             st.session_state.app_page = "📐 Model Training"
             st.rerun()
         return
@@ -733,190 +1028,127 @@ def evaluation_page():
     y_test = test_data['y_test']
     problem_type = st.session_state.problem_type
 
-    # ---------- 数据格式清理 ----------
-    # 转换为 numpy 数组并确保是一维
-    y_test = np.asarray(y_test).ravel()
-    predictions = np.asarray(predictions).ravel()
+    try:
+        y_test = np.asarray(y_test).ravel()
+        predictions = np.asarray(predictions).ravel()
 
-    # 检查并移除 NaN 或无穷大（如果有）
-    valid_mask = np.isfinite(y_test) & np.isfinite(predictions)
-    if not np.all(valid_mask):
-        st.warning(f"检测到 {np.sum(~valid_mask)} 个无效值（NaN 或无穷大），已自动移除。")
-        y_test = y_test[valid_mask]
-        predictions = predictions[valid_mask]
-
-    # 如果移除后没有样本，则报错返回
-    if len(y_test) == 0:
-        st.error("没有有效样本可用于评估。")
-        return
-
-    # 根据问题类型计算指标
-    if problem_type == "Classification":
-        # 对于分类问题，确保标签类型一致
-        # 如果一个是字符串，另一个是数值，统一转换为字符串进行比较
-        if y_test.dtype.kind in 'iuf' and predictions.dtype.kind in 'iuf':
-            # 两者都是数值，无需转换
-            pass
-        elif y_test.dtype.kind in 'iuf' and predictions.dtype.kind in 'UO':
-            # y_test 是数值，predictions 是字符串，将 predictions 转换为数值（可能失败）
-            try:
-                predictions = predictions.astype(y_test.dtype)
-            except ValueError:
-                st.error("预测值与真实值类型不兼容（数值 vs 字符串），无法计算指标。")
-                return
-        elif y_test.dtype.kind in 'UO' and predictions.dtype.kind in 'iuf':
-            # y_test 是字符串，predictions 是数值，将 predictions 转换为字符串
+        if problem_type == "Classification":
+            y_test = y_test.astype(str)
             predictions = predictions.astype(str)
-        # 如果都是字符串，直接使用
 
-        acc = accuracy_score(y_test, predictions)
-        prec = precision_score(y_test, predictions, average='weighted', zero_division=0)
-        rec = recall_score(y_test, predictions, average='weighted', zero_division=0)
-        f1 = f1_score(y_test, predictions, average='weighted', zero_division=0)
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("Accuracy", f"{acc:.4f}")
-        col2.metric("Precision", f"{prec:.4f}")
-        col3.metric("Recall", f"{rec:.4f}")
-        col4.metric("F1-Score", f"{f1:.4f}")
+            valid_mask = ~pd.isna(y_test) & ~pd.isna(predictions)
+            if not np.all(valid_mask):
+                st.warning(f"Detected {np.sum(~valid_mask)} invalid values and removed them before evaluation.")
+                y_test = y_test[valid_mask]
+                predictions = predictions[valid_mask]
 
-        st.markdown("### 🎯 Confusion Matrix")
-        cm = confusion_matrix(y_test, predictions)
-        fig, ax = plt.subplots(figsize=(8, 6))
-        sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', ax=ax)
-        ax.set_xlabel('Predicted')
-        ax.set_ylabel('Actual')
-        ax.set_title('Confusion Matrix')
-        st.pyplot(fig)
+            if len(y_test) == 0:
+                st.error("No valid samples available for evaluation.")
+                return
 
-        st.markdown("### 📝 Detailed Classification Report")
-        report = classification_report(y_test, predictions, output_dict=True, zero_division=0)
-        report_df = pd.DataFrame(report).transpose()
-        st.dataframe(report_df, use_container_width=True)
-    else:
-        # 回归问题
-        mae = mean_absolute_error(y_test, predictions)
-        mse = mean_squared_error(y_test, predictions)
-        rmse = np.sqrt(mse)
-        r2 = r2_score(y_test, predictions)
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("MAE", f"{mae:.4f}")
-        col2.metric("MSE", f"{mse:.4f}")
-        col3.metric("RMSE", f"{rmse:.4f}")
-        col4.metric("R² Score", f"{r2:.4f}")
+            unique_true = np.unique(y_test)
+            unique_pred = np.unique(predictions)
+            if len(unique_true) == 0 or len(unique_pred) == 0:
+                st.error("No categories in true or predicted values, cannot evaluate.")
+                return
 
-        st.markdown("### 📈 Actual vs Predicted")
-        fig = px.scatter(x=y_test, y=predictions, labels={'x': 'Actual', 'y': 'Predicted'},
-            title='Actual vs Predicted Values')
-        max_val = max(max(y_test), max(predictions))
-        min_val = min(min(y_test), min(predictions))
-        fig.add_trace(go.Scatter(x=[min_val, max_val], y=[min_val, max_val],
-                                mode='lines', name='Perfect Prediction',
-                                line=dict(color='red', dash='dash')))
-        st.plotly_chart(fig, use_container_width=True)
+            acc = accuracy_score(y_test, predictions)
+            prec = precision_score(y_test, predictions, average='weighted', zero_division=0)
+            rec = recall_score(y_test, predictions, average='weighted', zero_division=0)
+            f1 = f1_score(y_test, predictions, average='weighted', zero_division=0)
 
-        st.markdown("### 📉 Residual Plot")
-        residuals = y_test - predictions
-        fig = px.scatter(x=predictions, y=residuals, labels={'x': 'Predicted', 'y': 'Residuals'},
-                        title='Residual Plot')
-        fig.add_hline(y=0, line_dash="dash", line_color="red")
-        st.plotly_chart(fig, use_container_width=True)
+            col1, col2, col3, col4 = st.columns(4)
+            col1.metric("Accuracy", f"{acc:.4f}")
+            col2.metric("Precision", f"{prec:.4f}")
+            col3.metric("Recall", f"{rec:.4f}")
+            col4.metric("F1-Score", f"{f1:.4f}")
 
-    st.markdown("### 🏆 Best Model Found by FLAML")
-    if model is not None:
-        st.markdown(f"**Model Object:** {model.model}")
-        st.markdown(f"**Best Configuration:** {model.best_config}")
-
-def prediction_page():
-    st.markdown('<h2 class="sub-header">🔮 Make Predictions with Trained Model</h2>', unsafe_allow_html=True)
-    if not st.session_state.training_complete or st.session_state.model is None:
-        st.warning("⚠️ Please train a model first from the 'Model Training' page.")
-        if st.button("Go to Model Training"):
-            st.session_state.app_page = "📐 Model Training"
-            st.rerun()
-        return
-
-    model = st.session_state.model
-    method = st.radio("Select prediction method:",
-                    ["📤 Upload New Data", "✍️ Manual Input", "📊 Use Test Data"])
-
-    if method == "📤 Upload New Data":
-        st.markdown("### 📤 Upload New Data for Prediction")
-        new_file = st.file_uploader("Upload new CSV file for predictions", type=['csv'], key="pred_file")
-        if new_file is not None:
+            st.markdown("### 🎯 Confusion Matrix")
             try:
-                new_df = pd.read_csv(new_file)
-                original_cols = st.session_state.data.drop(columns=[st.session_state.target_column]).columns.tolist()
-                missing_cols = set(original_cols) - set(new_df.columns)
-                if missing_cols:
-                    st.warning(f"⚠️ Missing columns: {missing_cols}. They will be filled with 0.")
-                new_df = new_df.reindex(columns=original_cols, fill_value=0)
-
-                if st.session_state.imputer_num is not None and st.session_state.num_cols:
-                    new_df[st.session_state.num_cols] = st.session_state.imputer_num.transform(new_df[st.session_state.num_cols])
-                if st.session_state.imputer_cat is not None and st.session_state.cat_cols:
-                    new_df[st.session_state.cat_cols] = st.session_state.imputer_cat.transform(new_df[st.session_state.cat_cols])
-
-                st.markdown("### 📋 Data Preview")
-                st.dataframe(new_df.head(), use_container_width=True)
-
-                if st.button("🔮 Make Predictions", type="primary"):
-                    with st.spinner("Making predictions..."):
-                        preds = model.predict(new_df)
-                        results_df = new_df.copy()
-                        results_df['Predictions'] = preds
-                        st.success(f"✅ Predictions complete for {len(preds)} samples!")
-                        st.dataframe(results_df, use_container_width=True)
-                        csv = results_df.to_csv(index=False)
-                        b64 = base64.b64encode(csv.encode()).decode()
-                        href = f'<a href="data:file/csv;base64,{b64}" download="predictions.csv">📥 Download Predictions</a>'
-                        st.markdown(href, unsafe_allow_html=True)
+                cm = confusion_matrix(y_test, predictions)
+                fig, ax = plt.subplots(figsize=(8, 6))
+                sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', ax=ax)
+                ax.set_xlabel('Predicted')
+                ax.set_ylabel('Actual')
+                ax.set_title('Confusion Matrix')
+                st.pyplot(fig)
             except Exception as e:
-                st.error(f"Error processing file: {str(e)}")
+                st.error(f"Failed to generate confusion matrix: {e}")
 
-    elif method == "✍️ Manual Input":
-        st.markdown("### ✍️ Enter Values Manually")
-        feature_cols = st.session_state.data.drop(columns=[st.session_state.target_column]).columns.tolist()
-        input_data = {}
-        cols = st.columns(3)
-        for i, col_name in enumerate(feature_cols):
-            with cols[i % 3]:
-                if col_name in st.session_state.num_cols:
-                    min_val = float(st.session_state.data[col_name].min())
-                    max_val = float(st.session_state.data[col_name].max())
-                    mean_val = float(st.session_state.data[col_name].mean())
-                    input_data[col_name] = st.number_input(col_name, min_value=min_val, max_value=max_val, value=mean_val)
-                else:
-                    unique_vals = st.session_state.data[col_name].unique()[:10]
-                    input_data[col_name] = st.selectbox(col_name, unique_vals)
-        if st.button("🔮 Predict", type="primary"):
-            input_df = pd.DataFrame([input_data])
-            if st.session_state.imputer_num is not None and st.session_state.num_cols:
-                input_df[st.session_state.num_cols] = st.session_state.imputer_num.transform(input_df[st.session_state.num_cols])
-            if st.session_state.imputer_cat is not None and st.session_state.cat_cols:
-                input_df[st.session_state.cat_cols] = st.session_state.imputer_cat.transform(input_df[st.session_state.cat_cols])
-            pred = model.predict(input_df)[0]
-            st.markdown(f"""
-            <div class="success-box">
-            <h3>Predicted {st.session_state.target_column}: {pred}</h3>
-            </div>
-            """, unsafe_allow_html=True)
+            st.markdown("### 📝 Detailed Classification Report")
+            try:
+                report = classification_report(y_test, predictions, output_dict=True, zero_division=0)
+                report_df = pd.DataFrame(report).transpose()
+                st.dataframe(report_df, use_container_width=True)
+            except Exception as e:
+                st.error(f"Failed to generate classification report: {e}")
 
-    else:
-        st.markdown("### 📊 Predictions on Test Data")
-        if st.session_state.test_data is not None:
-            X_test = st.session_state.test_data['X_test']
-            y_test = st.session_state.test_data['y_test']
-            preds = model.predict(X_test)
-            comp_df = X_test.copy()
-            comp_df['Actual'] = y_test.values
-            comp_df['Predicted'] = preds
-            st.dataframe(comp_df.head(20), use_container_width=True)
-            csv = comp_df.to_csv(index=False)
-            b64 = base64.b64encode(csv.encode()).decode()
-            href = f'<a href="data:file/csv;base64,{b64}" download="test_predictions.csv">📥 Download Test Predictions</a>'
-            st.markdown(href, unsafe_allow_html=True)
         else:
-            st.info("No test data available. Please train a model first.")
+            y_test = y_test.astype(float)
+            predictions = predictions.astype(float)
+
+            valid_mask = np.isfinite(y_test) & np.isfinite(predictions)
+            if not np.all(valid_mask):
+                st.warning(f"Detected {np.sum(~valid_mask)} invalid values and removed them before evaluation.")
+                y_test = y_test[valid_mask]
+                predictions = predictions[valid_mask]
+
+            if len(y_test) == 0:
+                st.error("No valid samples available for evaluation.")
+                return
+
+            mae = mean_absolute_error(y_test, predictions)
+            mse = mean_squared_error(y_test, predictions)
+            rmse = np.sqrt(mse)
+            r2 = r2_score(y_test, predictions)
+
+            col1, col2, col3, col4 = st.columns(4)
+            col1.metric("MAE", f"{mae:.4f}")
+            col2.metric("MSE", f"{mse:.4f}")
+            col3.metric("RMSE", f"{rmse:.4f}")
+            col4.metric("R² Score", f"{r2:.4f}")
+
+            st.markdown("### 📈 Actual vs Predicted")
+            try:
+                fig = px.scatter(x=y_test, y=predictions, labels={'x': 'Actual', 'y': 'Predicted'},
+                                 title='Actual vs Predicted Values')
+                max_val = max(max(y_test), max(predictions))
+                min_val = min(min(y_test), min(predictions))
+                fig.add_trace(go.Scatter(x=[min_val, max_val], y=[min_val, max_val],
+                                         mode='lines', name='Perfect Prediction',
+                                         line=dict(color='red', dash='dash')))
+                st.plotly_chart(fig, use_container_width=True)
+            except Exception as e:
+                st.error(f"Failed to generate actual vs predicted plot: {e}")
+
+            st.markdown("### 📉 Residual Plot")
+            try:
+                residuals = y_test - predictions
+                fig = px.scatter(x=predictions, y=residuals, labels={'x': 'Predicted', 'y': 'Residuals'},
+                                 title='Residual Plot')
+                fig.add_hline(y=0, line_dash="dash", line_color="red")
+                st.plotly_chart(fig, use_container_width=True)
+            except Exception as e:
+                st.error(f"Failed to generate residual plot: {e}")
+
+        st.markdown("### 🏆 Best Model Found by FLAML")
+        if model is not None:
+            st.markdown(f"**Model Object:** {model.model}")
+            st.markdown(f"**Best Configuration:** {model.best_config}")
+
+        st.markdown("---")
+        col1, col2, col3 = st.columns([1, 2, 1])
+        with col2:
+            if st.session_state.training_complete:
+                if st.button("➡️ Go to Export Results", type="primary", use_container_width=True):
+                    st.session_state.app_page = "💾 Export Results"
+                    st.rerun()
+            else:
+                st.button("➡️ Go to Export Results (train model first)", disabled=True, use_container_width=True)
+
+    except Exception as e:
+        st.error(f"Unknown error occurred during evaluation: {str(e)}")
+        st.info("Please try retraining the model or check the data format.")
 
 def export_page():
     st.markdown('<h2 class="sub-header">💾 Export Model and Results</h2>', unsafe_allow_html=True)
@@ -936,6 +1168,13 @@ def export_page():
     with col2:
         st.markdown("#### 📊 Model Report")
         if st.button("Generate Model Report"):
+            if st.session_state.data is not None:
+                dataset_shape = st.session_state.data.shape
+                feature_count = len(st.session_state.data.columns) - 1
+            else:
+                dataset_shape = "N/A"
+                feature_count = "N/A"
+
             report_content = f"""
 # Machine Learning Model Report
 
@@ -946,8 +1185,8 @@ def export_page():
 - Target Column: {st.session_state.target_column}
 
 ## Dataset Information
-- Original Shape: {st.session_state.data.shape if st.session_state.data else 'N/A'}
-- Features: {len(st.session_state.data.columns) - 1 if st.session_state.data else 'N/A'}
+- Original Shape: {dataset_shape}
+- Features: {feature_count}
 
 ## Model Information
 - Best Model: {st.session_state.model.model}
@@ -958,8 +1197,19 @@ def export_page():
 This model was generated using FLAML AutoML through the No-Code ML Platform.
 """
             st.code(report_content, language='markdown')
-            st.download_button("📥 Download Report", data=report_content,
-                            file_name="ml_model_report.md", mime="text/markdown")
+            pdf_bytes = text_to_simple_pdf_bytes(report_content, title="ML Model Report")
+            st.download_button(
+                "📥 Download Report (PDF)",
+                data=pdf_bytes,
+                file_name="ml_model_report.pdf",
+                mime="application/pdf"
+            )
+            st.download_button(
+                "📥 Download Report (Markdown)",
+                data=report_content,
+                file_name="ml_model_report.md",
+                mime="text/markdown"
+            )
 
     st.markdown("### 📋 Session Information")
     session_info = {
@@ -977,18 +1227,23 @@ This model was generated using FLAML AutoML through the No-Code ML Platform.
     st.warning("This will clear all data and models from the current session.")
     if st.button("🔄 Reset All Data", type="secondary"):
         keys = ["data", "target_column", "problem_type", "model", "predictions", "test_data", "training_complete",
-                "imputer_num", "imputer_cat", "num_cols", "cat_cols"]
+                "imputer_num", "imputer_cat", "num_cols", "cat_cols", "cleaned_data"]
         for key in keys:
             if key in st.session_state:
                 st.session_state[key] = None
         st.rerun()
 
-# ---------- 仪表盘 Dashboard ----------
+    st.markdown("---")
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        if st.button("🔄 Start Over (Back to Data Upload)", type="secondary", use_container_width=True):
+            st.session_state.app_page = "📁 Data Upload"
+            st.rerun()
+
+# ---------- Dashboard ----------
 def dashboard_page():
-    # 设置紫色背景
     set_bg_image_local("purple.jpg")
     
-    # 侧边栏渐变样式
     st.markdown("""
     <style>
     section[data-testid="stSidebar"] {
@@ -997,7 +1252,6 @@ def dashboard_page():
     section[data-testid="stSidebar"] .css-1d391kg {
         background: transparent !important;
     }
-    /* 侧边栏文字颜色设为白色 */
     section[data-testid="stSidebar"] .st-emotion-cache-1wrcr25, 
     section[data-testid="stSidebar"] .st-emotion-cache-16txtl3 {
         color: white !important;
@@ -1010,12 +1264,13 @@ def dashboard_page():
     with st.sidebar:
         st.image("https://cdn-icons-png.flaticon.com/512/2103/2103832.png", width=100)
         st.markdown("### Sequential Steps")
+        # Update page options to include data cleaning
         app_page_options = [
             "📁 Data Upload",
-            "🔍 Exploratory Analysis",
+            "🧹 Data Cleaning",
+            "🔍 Exploratory Data Analysis",
             "📐 Model Training",
             "📈 Model Evaluation",
-            "🔮 Make Predictions",
             "💾 Export Results"
         ]
         selected = st.radio("Select a step:", app_page_options, index=app_page_options.index(st.session_state.app_page))
@@ -1026,10 +1281,11 @@ def dashboard_page():
         st.info("""
         This platform enables:
         - CSV data upload
+        - Data cleaning
         - Automated EDA
         - AutoML with FLAML
         - Model evaluation
-        - No-code predictions
+        - Export model report
         """)
         if not flaml_available:
             st.error("⚠️ FLAML not installed. Install with: `pip install flaml[automl]`")
@@ -1039,28 +1295,28 @@ def dashboard_page():
             st.session_state.logged_in = False
             st.session_state.user_name = ""
             keys = ["data", "target_column", "problem_type", "model", "predictions", "test_data", "training_complete",
-                    "imputer_num", "imputer_cat", "num_cols", "cat_cols"]
+                    "imputer_num", "imputer_cat", "num_cols", "cat_cols", "cleaned_data"]
             for key in keys:
                 if key in st.session_state:
                     st.session_state[key] = None
             go_to("front")
             st.rerun()
 
-    # 主内容区域
+    # Main content area
     if st.session_state.app_page == "📁 Data Upload":
         upload_page()
-    elif st.session_state.app_page == "🔍 Exploratory Analysis":
+    elif st.session_state.app_page == "🧹 Data Cleaning":
+        cleaning_page()
+    elif st.session_state.app_page == "🔍 Exploratory Data Analysis":
         eda_page()
     elif st.session_state.app_page == "📐 Model Training":
         training_page()
     elif st.session_state.app_page == "📈 Model Evaluation":
         evaluation_page()
-    elif st.session_state.app_page == "🔮 Make Predictions":
-        prediction_page()
     elif st.session_state.app_page == "💾 Export Results":
         export_page()
 
-# ---------- 主路由 ----------
+# ---------- Main routing ----------
 if st.session_state.page == "front":
     front_page()
 elif st.session_state.page == "login":
