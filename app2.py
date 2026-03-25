@@ -2,7 +2,7 @@ import streamlit as st
 import os
 import base64
 import hashlib
-import pandas as pd  # noqa
+import pandas as pd
 import numpy as np
 from datetime import datetime
 from typing import List
@@ -11,7 +11,7 @@ import seaborn as sns
 import plotly.express as px
 import plotly.graph_objects as go
 from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import StandardScaler, MinMaxScaler, LabelEncoder, OneHotEncoder
+from sklearn.preprocessing import StandardScaler, MinMaxScaler, LabelEncoder
 from sklearn.metrics import (
     accuracy_score, precision_score, recall_score, f1_score,
     confusion_matrix, classification_report,
@@ -20,12 +20,11 @@ from sklearn.metrics import (
 import warnings
 warnings.filterwarnings('ignore')
 
-from supabase import create_client  # noqa
+from supabase import create_client
 
 # ---------- Minimal PDF generator (no extra installs) ----------
 def _pdf_escape(text: str) -> str:
     return text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
-
 
 def text_to_simple_pdf_bytes(text: str, title: str = "ML Model Report") -> bytes:
     """
@@ -111,10 +110,10 @@ def text_to_simple_pdf_bytes(text: str, title: str = "ML Model Report") -> bytes
 try:
     from flaml import AutoML
     flaml_available = True
-except ImportError as e:
+except ImportError:
     flaml_available = False
-    st.error(f"⚠️ FLAML import failed: {e}. Please install with 'pip install flaml[automl]'.")
-    # Provide dummy class to avoid NameError
+    st.warning("⚠️ FLAML not installed. Install with 'pip install flaml[automl]' to use auto‑ML.")
+    # Dummy class to avoid NameError
     class AutoML:
         def __init__(self, **kwargs):
             raise ImportError("FLAML is not installed.")
@@ -143,7 +142,7 @@ if "supabase" not in st.session_state:
         st.error(f"Supabase connection failed: {e}")
         st.session_state.supabase = None
 
-# ---------- Background image (Base64 embedding) ----------
+# ---------- Background image helper ----------
 def get_base64_of_file(file_path):
     try:
         with open(file_path, "rb") as f:
@@ -178,7 +177,6 @@ def set_bg_image_local(image_path):
 
 # ---------- Password hashing helpers ----------
 def hash_password(password: str, iterations: int = 100_000) -> str:
-    """Hash password using PBKDF2-HMAC-SHA256."""
     salt = os.urandom(16)
     pwd_hash = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, iterations)
     return (
@@ -187,13 +185,7 @@ def hash_password(password: str, iterations: int = 100_000) -> str:
         f"{base64.b64encode(pwd_hash).decode('utf-8')}"
     )
 
-
 def verify_password(plain_password: str, stored_password: str) -> bool:
-    """
-    Verify password and keep backward compatibility.
-    - New format: pbkdf2_sha256$iterations$salt_b64$hash_b64
-    - Legacy format: plain-text password
-    """
     if not stored_password:
         return False
 
@@ -213,12 +205,11 @@ def verify_password(plain_password: str, stored_password: str) -> bool:
         except Exception:
             return False
 
-    # Legacy plain-text fallback (for already-registered users)
+    # Legacy plain-text fallback
     return stored_password == plain_password
 
 # ---------- User data storage (Supabase) ----------
 def register_user(email, password, name):
-    """Register a new user in Supabase"""
     if st.session_state.supabase is None:
         return False, "Supabase not connected"
     try:
@@ -232,7 +223,6 @@ def register_user(email, password, name):
         return False, f"Registration failed: {e}"
 
 def authenticate_user(email, password):
-    """Authenticate user credentials"""
     if st.session_state.supabase is None:
         return False, None
     try:
@@ -242,8 +232,7 @@ def authenticate_user(email, password):
         user = response.data[0]
         if verify_password(password, user.get("password", "")):
             return True, user["name"]
-        else:
-            return False, None
+        return False, None
     except Exception as e:
         st.error(f"Authentication failed: {e}")
         return False, None
@@ -259,7 +248,7 @@ if "user_name" not in st.session_state:
 def go_to(page):
     st.session_state.page = page
 
-# ---------- Global CSS styles (gradient buttons, cards, etc.) ----------
+# ---------- Global CSS styles ----------
 st.markdown("""
 <style>
     .main-header {
@@ -297,14 +286,6 @@ st.markdown("""
         border-radius: 5px;
         margin: 1rem 0;
     }
-    .metric-card {
-        background-color: white;
-        border-radius: 10px;
-        padding: 1rem;
-        margin: 0.5rem;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-    }
-    /* Global button style: blue to purple gradient */
     div.stButton > button {
         background: linear-gradient(135deg, #2196F3, #9C27B0) !important;
         color: white !important;
@@ -326,7 +307,6 @@ st.markdown("""
 # ---------- Front page ----------
 def front_page():
     set_bg_image_local("FrontPage.jpg")
-
     st.markdown("""
     <style>
     .right-panel {
@@ -352,16 +332,10 @@ def front_page():
         from { opacity: 0; transform: translateY(20px); }
         to { opacity: 1; transform: translateY(0); }
     }
-    .st-emotion-cache-ocqkz7 {
-        display: flex;
-        align-items: center;
-        justify-content: center;
-    }
     </style>
     """, unsafe_allow_html=True)
 
     col1, col2 = st.columns([1.2, 1.8])
-
     with col1:
         video_path = "animation.mp4"
         if os.path.exists(video_path):
@@ -386,7 +360,7 @@ def front_page():
         right_html = """
         <div class="right-panel">
             <h1>Welcome to<br>No-Code ML Platform</h1>
-            <p>Accessible for Machine Learning without code.</p>
+            <p>Accessible Machine Learning without code.</p>
         </div>
         """
         st.markdown(right_html, unsafe_allow_html=True)
@@ -394,13 +368,11 @@ def front_page():
             go_to("login")
             st.rerun()
 
-# ---------- Login/Register page (centered, no "remember email") ----------
+# ---------- Login/Register page ----------
 def login_page():
     set_bg_image_local("login.jpg")
-    
     st.markdown("""
     <style>
-    /* center content vertically */
     .stApp {
         display: flex;
         align-items: center;
@@ -444,20 +416,16 @@ def login_page():
         border-color: rgba(255,255,255,0.6) !important;
         transform: scale(1.02) !important;
     }
-    .back-button-container button:active {
-        transform: scale(0.98) !important;
-    }
     </style>
     """, unsafe_allow_html=True)
 
-    # Three-column layout, middle column for form to center horizontally
     _, col2, _ = st.columns([1, 2, 1])
     with col2:
         st.markdown('<div class="form-card">', unsafe_allow_html=True)
         st.markdown("<h2 style='color: white; text-align: center; margin-bottom: 1.5rem;'>Login / Register</h2>", unsafe_allow_html=True)
-        
+
         tab1, tab2 = st.tabs(["Login", "Register"])
-        
+
         with tab1:
             with st.form("login_form"):
                 email = st.text_input("Email")
@@ -472,13 +440,13 @@ def login_page():
                         st.rerun()
                     else:
                         st.error("Invalid email or password")
-        
+
         with tab2:
             with st.form("register_form"):
-                name = st.text_input("Full Name")  
-                email = st.text_input("Email")    
-                password = st.text_input("Password", type="password") 
-                confirm = st.text_input("Confirm Password", type="password")  
+                name = st.text_input("Full Name")
+                email = st.text_input("Email")
+                password = st.text_input("Password", type="password")
+                confirm = st.text_input("Confirm Password", type="password")
                 submitted = st.form_submit_button("Register")
                 if submitted:
                     if password != confirm:
@@ -491,13 +459,12 @@ def login_page():
                             st.success(msg)
                         else:
                             st.error(msg)
-        
+
         st.markdown('<div class="back-button-container">', unsafe_allow_html=True)
         if st.button("← Back to Home", key="back_home"):
             go_to("front")
             st.rerun()
         st.markdown('</div>', unsafe_allow_html=True)
-        
         st.markdown('</div>', unsafe_allow_html=True)
 
 # ---------- Initialize session state ----------
@@ -517,15 +484,6 @@ if "training_complete" not in st.session_state:
     st.session_state.training_complete = False
 if "app_page" not in st.session_state:
     st.session_state.app_page = "📁 Data Upload"
-if "imputer_num" not in st.session_state:
-    st.session_state.imputer_num = None
-if "imputer_cat" not in st.session_state:
-    st.session_state.imputer_cat = None
-if "num_cols" not in st.session_state:
-    st.session_state.num_cols = None
-if "cat_cols" not in st.session_state:
-    st.session_state.cat_cols = None
-# Added: temporary data for data cleaning preview
 if "cleaned_data" not in st.session_state:
     st.session_state.cleaned_data = None
 
@@ -588,10 +546,9 @@ def upload_page():
                 st.session_state.target_column = target_col
                 st.session_state.problem_type = problem_type
                 st.success(f"✅ Target set: {target_col} ({problem_type})")
-                st.session_state.app_page = "🧹 Data Cleaning"  # Jump to cleaning page
+                st.session_state.app_page = "🧹 Data Cleaning"
                 st.rerun()
 
-    # ---------- Button to go to cleaning page ----------
     st.markdown("---")
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
@@ -602,10 +559,9 @@ def upload_page():
         else:
             st.button("➡️ Go to Data Cleaning (set target first)", disabled=True, use_container_width=True)
 
-# ---------- New data cleaning page ----------
 def cleaning_page():
     st.markdown('<h2 class="sub-header">🧹 Data Cleaning</h2>', unsafe_allow_html=True)
-    
+
     if st.session_state.data is None:
         st.warning("⚠️ Please upload data first from the 'Data Upload' page.")
         if st.button("Go to Data Upload"):
@@ -618,49 +574,34 @@ def cleaning_page():
     st.dataframe(original_df.head())
     st.markdown(f"Shape: {original_df.shape}")
 
-    # Cleaning options container
     with st.expander("Cleaning Options", expanded=True):
-        # 1. Drop duplicate rows
         drop_duplicates = st.checkbox("Drop duplicate rows")
-        
-        # 2. Handle missing values
         missing_option = st.selectbox(
             "Handle missing values",
-            ["None", "Drop rows with any missing", "Drop columns with any missing", 
+            ["None", "Drop rows with any missing", "Drop columns with any missing",
              "Fill numeric with mean", "Fill numeric with median", "Fill categorical with mode"]
         )
-        
-        # 3. Handle outliers (numerical columns)
         outlier_option = st.selectbox(
             "Handle outliers (numerical columns)",
             ["None", "Remove rows with Z-score > 3", "Cap at 1st and 99th percentile"]
         )
-        
-        # 4. Feature encoding
         encode_option = st.selectbox(
             "Categorical encoding",
             ["None", "Label Encoding", "One-Hot Encoding"]
         )
-        
-        # 5. Feature scaling
         scale_option = st.selectbox(
             "Feature scaling (numerical)",
             ["None", "Standardization (z-score)", "Normalization (min-max)"]
         )
-        
-        # 6. Drop columns
         cols_to_drop = st.multiselect("Select columns to drop", original_df.columns.tolist())
-        
-        # Preview button
+
         if st.button("🔍 Preview Cleaning", type="secondary"):
             cleaned = original_df.copy()
-            
-            # 1. Drop duplicate rows
+
             if drop_duplicates:
                 cleaned = cleaned.drop_duplicates()
                 st.info(f"Dropped duplicates, new shape: {cleaned.shape}")
-            
-            # 2. Handle missing values
+
             if missing_option != "None":
                 if missing_option == "Drop rows with any missing":
                     cleaned = cleaned.dropna()
@@ -683,8 +624,7 @@ def cleaning_page():
                     for col in cat_cols:
                         cleaned[col] = cleaned[col].fillna(cleaned[col].mode()[0] if not cleaned[col].mode().empty else "Unknown")
                     st.info("Filled categorical missing values with mode.")
-            
-            # 3. Handle outliers
+
             if outlier_option != "None":
                 num_cols = cleaned.select_dtypes(include=[np.number]).columns
                 if outlier_option == "Remove rows with Z-score > 3":
@@ -694,13 +634,12 @@ def cleaning_page():
                     else:
                         numeric_subset = cleaned[num_cols].dropna()
                         if numeric_subset.empty:
-                            st.warning("No complete numerical rows available for Z-score outlier removal.")
+                            st.warning("No complete numerical rows available.")
                         else:
                             z_scores = np.abs(stats.zscore(numeric_subset, nan_policy='omit'))
                             if np.ndim(z_scores) == 1:
                                 z_scores = z_scores.reshape(-1, 1)
-                            threshold = 3
-                            outlier_rows = (z_scores > threshold).any(axis=1)
+                            outlier_rows = (z_scores > 3).any(axis=1)
                             outlier_idx = numeric_subset.index[outlier_rows]
                             cleaned = cleaned.drop(index=outlier_idx)
                             st.info(f"Removed rows with Z-score > 3, new shape: {cleaned.shape}")
@@ -710,8 +649,7 @@ def cleaning_page():
                         q99 = cleaned[col].quantile(0.99)
                         cleaned[col] = cleaned[col].clip(lower=q1, upper=q99)
                     st.info("Capped outliers at 1st and 99th percentiles.")
-            
-            # 4. Encoding
+
             if encode_option != "None":
                 cat_cols = cleaned.select_dtypes(include=['object']).columns
                 if len(cat_cols) > 0:
@@ -719,37 +657,32 @@ def cleaning_page():
                         for col in cat_cols:
                             le = LabelEncoder()
                             cleaned[col] = le.fit_transform(cleaned[col].astype(str))
-                        st.info("Applied Label Encoding to categorical columns.")
+                        st.info("Applied Label Encoding.")
                     elif encode_option == "One-Hot Encoding":
                         cleaned = pd.get_dummies(cleaned, columns=cat_cols, drop_first=True)
-                        st.info("Applied One-Hot Encoding to categorical columns.")
-            
-            # 5. Scaling
+                        st.info("Applied One-Hot Encoding.")
+
             if scale_option != "None":
                 num_cols = cleaned.select_dtypes(include=[np.number]).columns
                 if len(num_cols) > 0:
                     if scale_option == "Standardization (z-score)":
                         scaler = StandardScaler()
                         cleaned[num_cols] = scaler.fit_transform(cleaned[num_cols])
-                        st.info("Applied Standardization to numerical columns.")
+                        st.info("Applied Standardization.")
                     elif scale_option == "Normalization (min-max)":
                         scaler = MinMaxScaler()
                         cleaned[num_cols] = scaler.fit_transform(cleaned[num_cols])
-                        st.info("Applied Min-Max Normalization to numerical columns.")
-            
-            # 6. Drop columns
+                        st.info("Applied Min-Max Normalization.")
+
             if cols_to_drop:
                 cleaned = cleaned.drop(columns=cols_to_drop)
                 st.info(f"Dropped selected columns, new shape: {cleaned.shape}")
-            
+
             st.markdown("### Cleaned Data Preview")
             st.dataframe(cleaned.head())
             st.markdown(f"Final shape: {cleaned.shape}")
-            
-            # Save to temporary session state
             st.session_state.cleaned_data = cleaned
 
-    # Apply cleaning and continue
     st.markdown("---")
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
@@ -758,7 +691,7 @@ def cleaning_page():
                 st.session_state.data = st.session_state.cleaned_data
                 st.session_state.cleaned_data = None
                 st.success("Data cleaned successfully!")
-                st.session_state.app_page = "🔍 Exploratory Analysis"
+                st.session_state.app_page = "🔍 Exploratory Data Analysis"
                 st.rerun()
         else:
             st.button("✅ Apply Cleaning (preview first)", disabled=True, use_container_width=True)
@@ -868,7 +801,6 @@ def eda_page():
                 fig = px.pie(names=value_counts.index, values=value_counts.values, title="Class Proportions")
                 st.plotly_chart(fig, use_container_width=True)
 
-    # Button to go to Model Training
     st.markdown("---")
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
@@ -881,7 +813,7 @@ def eda_page():
 
 def training_page():
     st.markdown('<h2 class="sub-header">📐 Automated Model Training with FLAML</h2>', unsafe_allow_html=True)
-    
+
     if not flaml_available:
         st.error("⚠️ FLAML is not installed. Please install it with `pip install flaml[automl]` to use this feature.")
         if st.button("Go to Data Upload"):
@@ -911,7 +843,6 @@ def training_page():
     </div>
     """, unsafe_allow_html=True)
 
-    # ---------- Initialize session state variables (for sliders) ----------
     if "train_time" not in st.session_state:
         st.session_state.train_time = 10
     if "training_mode" not in st.session_state:
@@ -951,13 +882,6 @@ def training_page():
         )
         st.session_state.test_data = {'X_test': X_test, 'y_test': y_test}
 
-        num_cols = X_train.select_dtypes(include=[np.number]).columns.tolist()
-        cat_cols = X_train.select_dtypes(include=['object']).columns.tolist()
-        st.session_state.imputer_num = None
-        st.session_state.imputer_cat = None
-        st.session_state.num_cols = X_train.select_dtypes(include=[np.number]).columns.tolist()
-        st.session_state.cat_cols = X_train.select_dtypes(include=['object']).columns.tolist()
-
         with st.spinner("🧠 FLAML is searching for the best model. This may take several minutes..."):
             try:
                 task = 'classification' if problem_type == 'Classification' else 'regression'
@@ -980,7 +904,6 @@ def training_page():
                     verbose=0
                 )
 
-                # Display training results clearly
                 with st.expander("📊 Training Results (click to expand)", expanded=True):
                     col_res1, col_res2 = st.columns(2)
                     with col_res1:
@@ -1007,7 +930,7 @@ def training_page():
 
 def evaluation_page():
     st.markdown('<h2 class="sub-header">📈 Model Performance Evaluation</h2>', unsafe_allow_html=True)
-    
+
     if not st.session_state.training_complete or st.session_state.model is None:
         st.warning("⚠️ No trained model found. Please go to 'Model Training' and train a model first.")
         if st.button("Go to Model Training"):
@@ -1046,12 +969,6 @@ def evaluation_page():
                 st.error("No valid samples available for evaluation.")
                 return
 
-            unique_true = np.unique(y_test)
-            unique_pred = np.unique(predictions)
-            if len(unique_true) == 0 or len(unique_pred) == 0:
-                st.error("No categories in true or predicted values, cannot evaluate.")
-                return
-
             acc = accuracy_score(y_test, predictions)
             prec = precision_score(y_test, predictions, average='weighted', zero_division=0)
             rec = recall_score(y_test, predictions, average='weighted', zero_division=0)
@@ -1083,7 +1000,7 @@ def evaluation_page():
             except Exception as e:
                 st.error(f"Failed to generate classification report: {e}")
 
-        else:
+        else:  # Regression
             y_test = y_test.astype(float)
             predictions = predictions.astype(float)
 
@@ -1227,7 +1144,7 @@ This model was generated using FLAML AutoML through the No-Code ML Platform.
     st.warning("This will clear all data and models from the current session.")
     if st.button("🔄 Reset All Data", type="secondary"):
         keys = ["data", "target_column", "problem_type", "model", "predictions", "test_data", "training_complete",
-                "imputer_num", "imputer_cat", "num_cols", "cat_cols", "cleaned_data"]
+                "cleaned_data"]
         for key in keys:
             if key in st.session_state:
                 st.session_state[key] = None
@@ -1243,14 +1160,11 @@ This model was generated using FLAML AutoML through the No-Code ML Platform.
 # ---------- Dashboard ----------
 def dashboard_page():
     set_bg_image_local("purple.jpg")
-    
+
     st.markdown("""
     <style>
     section[data-testid="stSidebar"] {
         background:#ffffe0 !important;
-    }
-    section[data-testid="stSidebar"] .css-1d391kg {
-        background: transparent !important;
     }
     section[data-testid="stSidebar"] .st-emotion-cache-1wrcr25, 
     section[data-testid="stSidebar"] .st-emotion-cache-16txtl3 {
@@ -1264,7 +1178,6 @@ def dashboard_page():
     with st.sidebar:
         st.image("https://cdn-icons-png.flaticon.com/512/2103/2103832.png", width=100)
         st.markdown("### Sequential Steps")
-        # Update page options to include data cleaning
         app_page_options = [
             "📁 Data Upload",
             "🧹 Data Cleaning",
@@ -1273,7 +1186,14 @@ def dashboard_page():
             "📈 Model Evaluation",
             "💾 Export Results"
         ]
-        selected = st.radio("Select a step:", app_page_options, index=app_page_options.index(st.session_state.app_page))
+        # Safe index selection
+        if st.session_state.app_page in app_page_options:
+            default_index = app_page_options.index(st.session_state.app_page)
+        else:
+            default_index = 0
+            st.session_state.app_page = app_page_options[0]  # sync with valid value
+
+        selected = st.radio("Select a step:", app_page_options, index=default_index)
         st.session_state.app_page = selected
 
         st.markdown("---")
@@ -1295,7 +1215,7 @@ def dashboard_page():
             st.session_state.logged_in = False
             st.session_state.user_name = ""
             keys = ["data", "target_column", "problem_type", "model", "predictions", "test_data", "training_complete",
-                    "imputer_num", "imputer_cat", "num_cols", "cat_cols", "cleaned_data"]
+                    "cleaned_data"]
             for key in keys:
                 if key in st.session_state:
                     st.session_state[key] = None
