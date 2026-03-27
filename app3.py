@@ -605,7 +605,7 @@ def cleaning_page():
         missing_option = st.selectbox(
             "Handle missing values",
             ["None", "Drop rows with any missing", "Drop columns with any missing",
-             "Fill numeric with mean", "Fill numeric with median", "Fill categorical with mode"]
+                "Fill numeric with mean", "Fill numeric with median", "Fill categorical with mode"]
         )
         outlier_option = st.selectbox(
             "Handle outliers (numerical columns)",
@@ -876,7 +876,7 @@ def plot_feature_importance(model, feature_names, problem_type):
                 df = pd.DataFrame({'feature': feature_names, 'importance': importances})
                 df = df.sort_values('importance', ascending=False).head(20)
                 fig = px.bar(df, x='importance', y='feature', orientation='h',
-                             title='Feature Importance (Top 20)')
+                                title='Feature Importance (Top 20)')
                 st.plotly_chart(fig, use_container_width=True)
                 return True
         # For linear models, coefficients
@@ -886,7 +886,7 @@ def plot_feature_importance(model, feature_names, problem_type):
                 df = pd.DataFrame({'feature': feature_names, 'coefficient': coef})
                 df = df.sort_values('coefficient', ascending=False).head(20)
                 fig = px.bar(df, x='coefficient', y='feature', orientation='h',
-                             title='Coefficient Magnitude (Top 20)')
+                                title='Coefficient Magnitude (Top 20)')
                 st.plotly_chart(fig, use_container_width=True)
                 return True
         else:
@@ -1022,14 +1022,14 @@ def evaluation_page():
                             fig_roc.add_trace(go.Scatter(x=fpr, y=tpr, mode='lines', name=f'ROC (AUC={roc_auc:.3f})'))
                             fig_roc.add_trace(go.Scatter(x=[0,1], y=[0,1], mode='lines', name='Random', line=dict(dash='dash')))
                             fig_roc.update_layout(xaxis_title='False Positive Rate', yaxis_title='True Positive Rate',
-                                                  title='ROC Curve')
+                                                    title='ROC Curve')
                             st.plotly_chart(fig_roc, use_container_width=True)
 
                             precisions, recalls, _ = precision_recall_curve(y_test_encoded, y_proba[:, 1], pos_label=pos_label)
                             fig_pr = go.Figure()
                             fig_pr.add_trace(go.Scatter(x=recalls, y=precisions, mode='lines', name='PR Curve'))
                             fig_pr.update_layout(xaxis_title='Recall', yaxis_title='Precision',
-                                                 title='Precision-Recall Curve')
+                                                    title='Precision-Recall Curve')
                             st.plotly_chart(fig_pr, use_container_width=True)
                 except Exception as e:
                     st.info(f"Could not compute ROC/PR curves: {e}")
@@ -1183,12 +1183,12 @@ def evaluation_page():
             st.markdown("### 📈 Actual vs Predicted")
             try:
                 fig = px.scatter(x=y_test, y=predictions, labels={'x': 'Actual', 'y': 'Predicted'},
-                                 title='Actual vs Predicted Values')
+                                    title='Actual vs Predicted Values')
                 max_val = max(max(y_test), max(predictions))
                 min_val = min(min(y_test), min(predictions))
                 fig.add_trace(go.Scatter(x=[min_val, max_val], y=[min_val, max_val],
-                                         mode='lines', name='Perfect Prediction',
-                                         line=dict(color='red', dash='dash')))
+                                            mode='lines', name='Perfect Prediction',
+                                            line=dict(color='red', dash='dash')))
                 st.plotly_chart(fig, use_container_width=True)
             except Exception as e:
                 st.error(f"Failed to generate actual vs predicted plot: {e}")
@@ -1198,7 +1198,7 @@ def evaluation_page():
             try:
                 residuals = y_test - predictions
                 fig = px.scatter(x=predictions, y=residuals, labels={'x': 'Predicted', 'y': 'Residuals'},
-                                 title='Residual Plot')
+                                    title='Residual Plot')
                 fig.add_hline(y=0, line_dash="dash", line_color="red")
                 st.plotly_chart(fig, use_container_width=True)
 
@@ -1583,7 +1583,7 @@ def dashboard_page():
     </style>
     """, unsafe_allow_html=True)
 
-    st.markdown(f"<h1 style='color: white;'>Welcome, {st.session_state.user_name}!</h1>", unsafe_allow_html=True)
+    st.markdown(f"<h1 style='color: black;'>Welcome, {st.session_state.user_name}!</h1>", unsafe_allow_html=True)
 
     with st.sidebar:
         st.image("https://cdn-icons-png.flaticon.com/512/2103/2103832.png", width=100)
