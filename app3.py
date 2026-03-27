@@ -162,7 +162,7 @@ if "supabase" not in st.session_state:
         st.error(f"Supabase connection failed: {e}")
         st.session_state.supabase = None
 
-# ---------- Background image helper ----------
+# ---------- Background image helper (now supports both .jpg and .png) ----------
 def get_base64_of_file(file_path):
     try:
         with open(file_path, "rb") as f:
@@ -171,29 +171,33 @@ def get_base64_of_file(file_path):
     except FileNotFoundError:
         return None
 
-def set_bg_image_local(image_path):
-    bin_str = get_base64_of_file(image_path)
-    if bin_str:
-        page_bg_img = f"""
-        <style>
-        .stApp {{
-            background-image: url("data:image/jpg;base64,{bin_str}");
-            background-size: cover;
-            background-repeat: no-repeat;
-            background-attachment: fixed;
-        }}
-        </style>
-        """
-        st.markdown(page_bg_img, unsafe_allow_html=True)
-    else:
-        fallback_bg = """
-        <style>
-        .stApp {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        }
-        </style>
-        """
-        st.markdown(fallback_bg, unsafe_allow_html=True)
+def set_bg_image_local(image_base_name):
+    # Try .jpg first, then .png
+    for ext in ['.jpg', '.png']:
+        full_path = image_base_name + ext
+        bin_str = get_base64_of_file(full_path)
+        if bin_str:
+            page_bg_img = f"""
+            <style>
+            .stApp {{
+                background-image: url("data:image/jpg;base64,{bin_str}");
+                background-size: cover;
+                background-repeat: no-repeat;
+                background-attachment: fixed;
+            }}
+            </style>
+            """
+            st.markdown(page_bg_img, unsafe_allow_html=True)
+            return
+    # Fallback gradient if no image found
+    fallback_bg = """
+    <style>
+    .stApp {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    }
+    </style>
+    """
+    st.markdown(fallback_bg, unsafe_allow_html=True)
 
 # ---------- Password hashing helpers ----------
 def hash_password(password: str, iterations: int = 100_000) -> str:
@@ -326,7 +330,7 @@ st.markdown("""
 
 # ---------- Front page ----------
 def front_page():
-    set_bg_image_local("FrontPage.jpg")
+    set_bg_image_local("FrontPage")
     st.markdown("""
     <style>
     .right-panel {
@@ -390,7 +394,7 @@ def front_page():
 
 # ---------- Login/Register page ----------
 def login_page():
-    set_bg_image_local("login.jpg")
+    set_bg_image_local("login")
     st.markdown("""
     <style>
     .stApp {
@@ -1296,7 +1300,7 @@ def evaluation_page():
         st.error(f"Unknown error occurred during evaluation: {str(e)}")
         st.info("Please try retraining the model or check the data format.")
 
-# ---------- Training page (fixed: encode classification target) ----------
+# ---------- Training page (fixed: encode classification target, avoid logistic regression for multiclass) ----------
 def training_page():
     st.markdown('<h2 class="sub-header">📐 Automated Model Training with FLAML</h2>', unsafe_allow_html=True)
 
@@ -1373,20 +1377,29 @@ def training_page():
         X = df.drop(columns=[target_col])
         y = df[target_col]
 
+        # Basic data check
+        if X.isnull().any().any():
+            st.warning("⚠️ Your dataset contains missing values. Consider using the Data Cleaning page first.")
+        if y.isnull().any():
+            st.error("❌ Target column contains missing values. Please handle them before training.")
+            st.stop()
+
         X_train, X_test, y_train, y_test = train_test_split(
             X, y, test_size=test_size, random_state=random_state
         )
-
-        # Store test data (original labels) for evaluation
         st.session_state.test_data = {'X_test': X_test, 'y_test': y_test}
 
-        # For classification, encode target labels to integers
+        # Encode target for classification
         encoder = None
         if problem_type == "Classification":
             encoder = LabelEncoder()
             y_train_encoded = encoder.fit_transform(y_train)
             y_test_encoded = encoder.transform(y_test)
-            # Store encoder to decode predictions later
+
+            # Check for only one class
+            if len(np.unique(y_train_encoded)) == 1:
+                st.error("❌ Target variable has only one class. Classification requires at least two classes.")
+                st.stop()
             st.session_state.label_encoder = encoder
         else:
             y_train_encoded = y_train
@@ -1397,16 +1410,15 @@ def training_page():
                 task = 'classification' if problem_type == 'Classification' else 'regression'
                 metric = 'accuracy' if task == 'classification' else 'r2'
 
-                # Adjust estimator list for classification: avoid 'lrl1' for multiclass
+                # Choose estimators based on problem type and number of classes
                 if task == 'classification':
-                    # Check if target is binary (after encoding)
-                    if len(np.unique(y_train_encoded)) == 2:
-                        estimator_list = ["lgbm", "rf", "lrl1"]  # L1 logistic works for binary
+                    n_classes = len(np.unique(y_train_encoded))
+                    if n_classes == 2:
+                        estimator_list = ["lgbm", "rf", "lrl1"]   # binary classification
                     else:
-                        estimator_list = ["lgbm", "rf"]  # tree-based models for multiclass
+                        estimator_list = ["lgbm", "rf"]           # multi-class classification
                 else:
-                    # Regression: use tree-based and linear
-                    estimator_list = ["lgbm", "rf", "lrl2"]
+                    estimator_list = ["lgbm", "rf", "lrl2"]       # regression
 
                 automl = AutoML()
                 automl.fit(
@@ -1422,27 +1434,25 @@ def training_page():
                     verbose=0
                 )
 
-                # Predict on test set (encoded)
+                # Predict and decode if necessary
                 y_pred_encoded = automl.predict(X_test)
-
-                # Decode predictions if classification
                 if problem_type == "Classification" and encoder is not None:
                     y_pred = encoder.inverse_transform(y_pred_encoded.astype(int))
                 else:
                     y_pred = y_pred_encoded
 
-                # Compute score on test set (using encoded for classification to avoid mismatch)
+                # Score
                 if problem_type == "Classification":
                     score = accuracy_score(y_test_encoded, y_pred_encoded)
                 else:
                     score = automl.score(X_test, y_test)
 
-                # Store in session state
+                # Store results
                 st.session_state.model = automl
                 st.session_state.predictions = y_pred
                 st.session_state.training_complete = True
 
-                # Show results in an expander
+                # Show success
                 with st.expander("📊 Training Results (click to expand)", expanded=True):
                     col_res1, col_res2 = st.columns(2)
                     with col_res1:
@@ -1451,13 +1461,17 @@ def training_page():
                     with col_res2:
                         st.markdown("#### ⚙️ Best Hyperparameters")
                         st.json(automl.best_config)
-
                     st.markdown(f"#### 📈 Test Score ({metric}): **{score:.4f}**")
 
                 st.success("🎉 Model training completed successfully!")
                 st.session_state.app_page = "📈 Model Evaluation"
                 st.rerun()
 
+            except AssertionError as e:
+                if "LogisticRegression" in str(e):
+                    st.error("❌ Training failed because FLAML attempted to use logistic regression for a multi‑class classification. The code now avoids this by using tree‑based models for multi‑class tasks. Please check your target variable and ensure it has only two classes if you need binary classification.")
+                else:
+                    st.error(f"❌ Training failed: {type(e).__name__}: {str(e)}")
             except Exception as e:
                 st.error(f"❌ Training failed: {type(e).__name__}: {str(e)}")
                 print(f"Training error: {type(e).__name__}: {e}")
@@ -1555,7 +1569,7 @@ This model was generated using FLAML AutoML through the No-Code ML Platform.
 
 # ---------- Dashboard ----------
 def dashboard_page():
-    set_bg_image_local("purple.jpg")
+    set_bg_image_local("purple")   # Now supports both .jpg and .png
 
     st.markdown("""
     <style>
