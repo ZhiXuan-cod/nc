@@ -889,7 +889,7 @@ def plot_feature_importance(model, feature_names, problem_type):
         st.info(f"Could not plot feature importance: {e}")
     return False
 
-# ---------- Enhanced evaluation page with interpretability ----------
+# ---------- Enhanced evaluation page with interpretability (fixed export) ----------
 def evaluation_page():
     st.markdown('<h2 class="sub-header">📈 Model Performance Evaluation</h2>', unsafe_allow_html=True)
 
@@ -912,7 +912,6 @@ def evaluation_page():
     test_data = st.session_state.test_data
     y_test = test_data['y_test']
     problem_type = st.session_state.problem_type
-    # Get feature names (X_test may be a DataFrame; if not, use placeholder)
     X_test = test_data['X_test']
     if isinstance(X_test, pd.DataFrame):
         feature_names = X_test.columns.tolist()
@@ -931,7 +930,7 @@ def evaluation_page():
                 st.markdown("The table above shows the best configuration found for each estimator type, "
                             "along with their validation score (lower is better for loss).")
 
-        # --- Classification evaluation with enhanced interpretability ---
+        # --- Classification evaluation ---
         if problem_type == "Classification":
             y_test = y_test.astype(str)
             predictions = predictions.astype(str)
@@ -974,7 +973,7 @@ def evaluation_page():
             elif rec < 0.5:
                 st.warning("⚠️ **Low recall** – many false negatives; the model misses a significant number of positive instances.")
 
-            # --- Confusion matrix with Plotly (interactive) ---
+            # --- Confusion matrix ---
             st.markdown("### 🎯 Confusion Matrix")
             try:
                 cm = confusion_matrix(y_test, predictions)
@@ -985,7 +984,6 @@ def evaluation_page():
                 fig.update_layout(xaxis_title="Predicted", yaxis_title="Actual")
                 st.plotly_chart(fig, use_container_width=True)
 
-                # Interpret confusion matrix
                 if len(labels) == 2:  # Binary classification
                     tn, fp, fn, tp = cm.ravel()
                     st.markdown(f"""
@@ -999,12 +997,10 @@ def evaluation_page():
             except Exception as e:
                 st.error(f"Failed to generate confusion matrix: {e}")
 
-            # --- ROC & PR curves (for binary) ---
-            # Try to get probabilities if available
+            # --- ROC & PR curves (binary) ---
             if hasattr(model, 'predict_proba'):
                 try:
                     y_proba = model.predict_proba(X_test)
-                    # Binary classification: assume two classes
                     if y_proba.shape[1] == 2:
                         fpr, tpr, _ = roc_curve(y_test, y_proba[:, 1], pos_label=labels[1])
                         roc_auc = auc(fpr, tpr)
@@ -1015,7 +1011,6 @@ def evaluation_page():
                                               title='ROC Curve')
                         st.plotly_chart(fig_roc, use_container_width=True)
 
-                        # PR curve
                         precisions, recalls, _ = precision_recall_curve(y_test, y_proba[:, 1], pos_label=labels[1])
                         fig_pr = go.Figure()
                         fig_pr.add_trace(go.Scatter(x=recalls, y=precisions, mode='lines', name='PR Curve'))
@@ -1025,14 +1020,13 @@ def evaluation_page():
                 except Exception as e:
                     st.info(f"Could not compute ROC/PR curves: {e}")
 
-            # --- Threshold tuning with business cost simulation ---
+            # --- Threshold tuning ---
             if hasattr(model, 'predict_proba') and len(labels) == 2:
                 st.markdown("### ⚙️ Decision Threshold Tuning & Cost Simulation")
                 st.write("Adjust the classification threshold to optimize for your business needs.")
                 y_proba = model.predict_proba(X_test)[:, 1]
                 threshold = st.slider("Threshold", 0.0, 1.0, 0.5, 0.01)
                 y_pred_adj = (y_proba >= threshold).astype(int)
-                # Map back to original labels
                 unique_labels = sorted(set(y_test))
                 if len(unique_labels) == 2:
                     label_map = {0: unique_labels[0], 1: unique_labels[1]}
@@ -1041,7 +1035,6 @@ def evaluation_page():
                     y_pred_adj_labels = y_pred_adj.astype(str)
 
                 tn, fp, fn, tp = confusion_matrix(y_test, y_pred_adj_labels).ravel()
-                # Cost simulation
                 st.markdown("**Simulate business costs:**")
                 col1, col2 = st.columns(2)
                 with col1:
@@ -1051,7 +1044,6 @@ def evaluation_page():
                 total_cost = fp * cost_fp + fn * cost_fn
                 st.metric("Total Simulated Cost", f"${total_cost:,.2f}")
 
-                # Show metrics at new threshold
                 adj_acc = accuracy_score(y_test, y_pred_adj_labels)
                 adj_prec = precision_score(y_test, y_pred_adj_labels, average='binary', pos_label=unique_labels[1])
                 adj_rec = recall_score(y_test, y_pred_adj_labels, average='binary', pos_label=unique_labels[1])
@@ -1059,14 +1051,13 @@ def evaluation_page():
 
             # --- Feature importance ---
             st.markdown("### 🔍 Feature Importance")
-            # Use the best model (stored in automl.model) if available
             if hasattr(model, 'model'):
                 inner_model = model.model
             else:
                 inner_model = model
             plot_feature_importance(inner_model, feature_names, problem_type)
 
-            # --- Detailed classification report (as table) ---
+            # --- Detailed classification report ---
             st.markdown("### 📝 Detailed Classification Report")
             try:
                 report = classification_report(y_test, predictions, output_dict=True, zero_division=0)
@@ -1075,7 +1066,72 @@ def evaluation_page():
             except Exception as e:
                 st.error(f"Failed to generate classification report: {e}")
 
-        # --- Regression evaluation with enhanced interpretability ---
+            # --- Export buttons for Classification (direct download) ---
+            st.markdown("---")
+            col1, col2 = st.columns([1, 2])
+            with col1:
+                # Build report text for PDF
+                report_lines = []
+                report_lines.append("# Machine Learning Model Evaluation Report")
+                report_lines.append(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+                report_lines.append(f"Problem Type: Classification")
+                report_lines.append(f"Target Column: {st.session_state.target_column}")
+                report_lines.append("")
+                report_lines.append("## Performance Summary")
+                report_lines.append(f"- Accuracy: {acc:.4f}")
+                report_lines.append(f"- Weighted Precision: {prec:.4f}")
+                report_lines.append(f"- Weighted Recall: {rec:.4f}")
+                report_lines.append(f"- Weighted F1: {f1:.4f}")
+                report_lines.append("")
+                report_lines.append("### Confusion Matrix")
+                cm_str = np.array2string(confusion_matrix(y_test, predictions))
+                report_lines.append(cm_str)
+                report_lines.append("")
+                report_lines.append("### Classification Report")
+                report_lines.append(classification_report(y_test, predictions, zero_division=0))
+                report_lines.append("")
+                report_lines.append("## Best Model")
+                report_lines.append(str(model.model))
+                if hasattr(model, 'best_config'):
+                    report_lines.append("Best hyperparameters:")
+                    report_lines.append(str(model.best_config))
+                pdf_bytes = text_to_simple_pdf_bytes("\n".join(report_lines), title="ML Evaluation Report")
+                st.download_button(
+                    label="📥 Download Full Evaluation Report (PDF)",
+                    data=pdf_bytes,
+                    file_name="ml_evaluation_report.pdf",
+                    mime="application/pdf",
+                    use_container_width=True,
+                    key="cls_pdf"
+                )
+            with col2:
+                report_md = "\n".join([
+                    "# Machine Learning Model Evaluation Report",
+                    f"**Generated:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+                    f"**Problem Type:** Classification",
+                    f"**Target Column:** {st.session_state.target_column}",
+                    "",
+                    "## Performance Summary",
+                    f"- Accuracy: {acc:.4f}",
+                    f"- Weighted Precision: {prec:.4f}",
+                    f"- Weighted Recall: {rec:.4f}",
+                    f"- Weighted F1: {f1:.4f}",
+                    "",
+                    "## Best Model",
+                    f"```\n{model.model}\n```",
+                    "Best hyperparameters:" if hasattr(model, 'best_config') else "",
+                    f"```json\n{model.best_config}\n```" if hasattr(model, 'best_config') else ""
+                ])
+                st.download_button(
+                    label="📥 Download Report (Markdown)",
+                    data=report_md,
+                    file_name="ml_evaluation_report.md",
+                    mime="text/markdown",
+                    use_container_width=True,
+                    key="cls_md"
+                )
+
+        # --- Regression evaluation ---
         else:  # Regression
             y_test = y_test.astype(float)
             predictions = predictions.astype(float)
@@ -1127,7 +1183,7 @@ def evaluation_page():
             except Exception as e:
                 st.error(f"Failed to generate actual vs predicted plot: {e}")
 
-            # --- Residual plot with interpretation ---
+            # --- Residual plot ---
             st.markdown("### 📉 Residual Plot")
             try:
                 residuals = y_test - predictions
@@ -1136,7 +1192,6 @@ def evaluation_page():
                 fig.add_hline(y=0, line_dash="dash", line_color="red")
                 st.plotly_chart(fig, use_container_width=True)
 
-                # Residuals interpretation
                 residuals_mean = np.mean(residuals)
                 residuals_std = np.std(residuals)
                 st.markdown(f"- **Mean of residuals:** {residuals_mean:.4f} (should be close to zero).")
@@ -1145,7 +1200,6 @@ def evaluation_page():
                     st.warning("⚠️ Residuals have a non-zero mean – there might be systematic bias in predictions.")
                 else:
                     st.success("✅ Residuals are roughly centered around zero, indicating no systematic bias.")
-
             except Exception as e:
                 st.error(f"Failed to generate residual plot: {e}")
 
@@ -1157,43 +1211,21 @@ def evaluation_page():
                 inner_model = model
             plot_feature_importance(inner_model, feature_names, problem_type)
 
-        # --- Best model details ---
-        st.markdown("### 🏆 Best Model Found by FLAML")
-        if model is not None:
-            st.markdown(f"**Model Object:** {model.model}")
-            if hasattr(model, 'best_config'):
-                st.json(model.best_config)
-
-        # --- Enhanced export section: Prepare rich report ---
-        st.markdown("---")
-        col1, col2 = st.columns([1, 2])
-        with col1:
-            if st.button("📥 Download Full Evaluation Report (PDF)", use_container_width=True):
-                # Generate a rich text report with all metrics and interpretations
+            # --- Export buttons for Regression (direct download) ---
+            st.markdown("---")
+            col1, col2 = st.columns([1, 2])
+            with col1:
                 report_lines = []
                 report_lines.append("# Machine Learning Model Evaluation Report")
                 report_lines.append(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-                report_lines.append(f"Problem Type: {problem_type}")
+                report_lines.append(f"Problem Type: Regression")
                 report_lines.append(f"Target Column: {st.session_state.target_column}")
                 report_lines.append("")
                 report_lines.append("## Performance Summary")
-                if problem_type == "Classification":
-                    report_lines.append(f"- Accuracy: {acc:.4f}")
-                    report_lines.append(f"- Weighted Precision: {prec:.4f}")
-                    report_lines.append(f"- Weighted Recall: {rec:.4f}")
-                    report_lines.append(f"- Weighted F1: {f1:.4f}")
-                    report_lines.append("")
-                    report_lines.append("### Confusion Matrix")
-                    cm_str = np.array2string(confusion_matrix(y_test, predictions))
-                    report_lines.append(cm_str)
-                    report_lines.append("")
-                    report_lines.append("### Classification Report")
-                    report_lines.append(classification_report(y_test, predictions, zero_division=0))
-                else:
-                    report_lines.append(f"- MAE: {mae:.4f}")
-                    report_lines.append(f"- MSE: {mse:.4f}")
-                    report_lines.append(f"- RMSE: {rmse:.4f}")
-                    report_lines.append(f"- R²: {r2:.4f}")
+                report_lines.append(f"- MAE: {mae:.4f}")
+                report_lines.append(f"- MSE: {mse:.4f}")
+                report_lines.append(f"- RMSE: {rmse:.4f}")
+                report_lines.append(f"- R²: {r2:.4f}")
                 report_lines.append("")
                 report_lines.append("## Best Model")
                 report_lines.append(str(model.model))
@@ -1202,27 +1234,25 @@ def evaluation_page():
                     report_lines.append(str(model.best_config))
                 pdf_bytes = text_to_simple_pdf_bytes("\n".join(report_lines), title="ML Evaluation Report")
                 st.download_button(
-                    label="Download PDF",
+                    label="📥 Download Full Evaluation Report (PDF)",
                     data=pdf_bytes,
                     file_name="ml_evaluation_report.pdf",
                     mime="application/pdf",
-                    key="eval_pdf_download"
+                    use_container_width=True,
+                    key="reg_pdf"
                 )
-
-        with col2:
-            if st.button("📥 Download Report (Markdown)", use_container_width=True):
-                # Similar to above but Markdown
+            with col2:
                 report_md = "\n".join([
                     "# Machine Learning Model Evaluation Report",
                     f"**Generated:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-                    f"**Problem Type:** {problem_type}",
+                    f"**Problem Type:** Regression",
                     f"**Target Column:** {st.session_state.target_column}",
                     "",
                     "## Performance Summary",
-                    f"- Accuracy: {acc:.4f}" if problem_type == "Classification" else f"- MAE: {mae:.4f}",
-                    f"- Weighted Precision: {prec:.4f}" if problem_type == "Classification" else f"- MSE: {mse:.4f}",
-                    f"- Weighted Recall: {rec:.4f}" if problem_type == "Classification" else f"- RMSE: {rmse:.4f}",
-                    f"- Weighted F1: {f1:.4f}" if problem_type == "Classification" else f"- R²: {r2:.4f}",
+                    f"- MAE: {mae:.4f}",
+                    f"- MSE: {mse:.4f}",
+                    f"- RMSE: {rmse:.4f}",
+                    f"- R²: {r2:.4f}",
                     "",
                     "## Best Model",
                     f"```\n{model.model}\n```",
@@ -1230,12 +1260,20 @@ def evaluation_page():
                     f"```json\n{model.best_config}\n```" if hasattr(model, 'best_config') else ""
                 ])
                 st.download_button(
-                    label="Download Markdown",
+                    label="📥 Download Report (Markdown)",
                     data=report_md,
                     file_name="ml_evaluation_report.md",
                     mime="text/markdown",
-                    key="eval_md_download"
+                    use_container_width=True,
+                    key="reg_md"
                 )
+
+        # --- Best model details ---
+        st.markdown("### 🏆 Best Model Found by FLAML")
+        if model is not None:
+            st.markdown(f"**Model Object:** {model.model}")
+            if hasattr(model, 'best_config'):
+                st.json(model.best_config)
 
         # Navigation
         st.markdown("---")
@@ -1252,7 +1290,7 @@ def evaluation_page():
         st.error(f"Unknown error occurred during evaluation: {str(e)}")
         st.info("Please try retraining the model or check the data format.")
 
-# ---------- Training page (fixed) ----------
+# ---------- Training page ----------
 def training_page():
     st.markdown('<h2 class="sub-header">📐 Automated Model Training with FLAML</h2>', unsafe_allow_html=True)
 
@@ -1389,7 +1427,7 @@ def training_page():
                 # Also log it (optional)
                 print(f"Training error: {type(e).__name__}: {e}")
 
-# ---------- Export page (unchanged) ----------
+# ---------- Export page ----------
 def export_page():
     st.markdown('<h2 class="sub-header">💾 Export Model and Results</h2>', unsafe_allow_html=True)
     if not st.session_state.training_complete:
