@@ -121,7 +121,7 @@ try:
 except ImportError:
     flaml_available = False
     st.warning("⚠️ FLAML not installed. Install with 'pip install flaml[automl]' to use auto‑ML.")
-    # Dummy class to avoid NameError (now includes required attributes)
+    # Dummy class to avoid NameError
     class AutoML:
         def __init__(self, **kwargs):
             pass
@@ -506,6 +506,8 @@ if "app_page" not in st.session_state:
     st.session_state.app_page = "📁 Data Upload"
 if "cleaned_data" not in st.session_state:
     st.session_state.cleaned_data = None
+if "label_encoder" not in st.session_state:
+    st.session_state.label_encoder = None
 
 # ---------- Dashboard subpages ----------
 def upload_page():
@@ -910,7 +912,7 @@ def evaluation_page():
     model = st.session_state.model
     predictions = st.session_state.predictions
     test_data = st.session_state.test_data
-    y_test = test_data['y_test']
+    y_test = test_data['y_test']  # Original labels (for classification: strings; for regression: floats)
     problem_type = st.session_state.problem_type
     X_test = test_data['X_test']
     if isinstance(X_test, pd.DataFrame):
@@ -932,24 +934,25 @@ def evaluation_page():
 
         # --- Classification evaluation ---
         if problem_type == "Classification":
-            y_test = y_test.astype(str)
-            predictions = predictions.astype(str)
+            # Ensure string labels for classification report and confusion matrix
+            y_test_str = y_test.astype(str)
+            predictions_str = predictions.astype(str)
 
-            valid_mask = ~pd.isna(y_test) & ~pd.isna(predictions)
+            valid_mask = ~pd.isna(y_test_str) & ~pd.isna(predictions_str)
             if not np.all(valid_mask):
                 st.warning(f"Detected {np.sum(~valid_mask)} invalid values and removed them before evaluation.")
-                y_test = y_test[valid_mask]
-                predictions = predictions[valid_mask]
+                y_test_str = y_test_str[valid_mask]
+                predictions_str = predictions_str[valid_mask]
 
-            if len(y_test) == 0:
+            if len(y_test_str) == 0:
                 st.error("No valid samples available for evaluation.")
                 return
 
             # Standard metrics
-            acc = accuracy_score(y_test, predictions)
-            prec = precision_score(y_test, predictions, average='weighted', zero_division=0)
-            rec = recall_score(y_test, predictions, average='weighted', zero_division=0)
-            f1 = f1_score(y_test, predictions, average='weighted', zero_division=0)
+            acc = accuracy_score(y_test_str, predictions_str)
+            prec = precision_score(y_test_str, predictions_str, average='weighted', zero_division=0)
+            rec = recall_score(y_test_str, predictions_str, average='weighted', zero_division=0)
+            f1 = f1_score(y_test_str, predictions_str, average='weighted', zero_division=0)
 
             col1, col2, col3, col4 = st.columns(4)
             col1.metric("Accuracy", f"{acc:.4f}")
@@ -976,8 +979,8 @@ def evaluation_page():
             # --- Confusion matrix ---
             st.markdown("### 🎯 Confusion Matrix")
             try:
-                cm = confusion_matrix(y_test, predictions)
-                labels = sorted(set(y_test).union(set(predictions)))
+                cm = confusion_matrix(y_test_str, predictions_str)
+                labels = sorted(set(y_test_str).union(set(predictions_str)))
                 fig = px.imshow(cm, text_auto=True, x=labels, y=labels,
                                 color_continuous_scale='Blues',
                                 title="Confusion Matrix (Counts)")
@@ -1000,41 +1003,44 @@ def evaluation_page():
             # --- ROC & PR curves (binary) ---
             if hasattr(model, 'predict_proba'):
                 try:
+                    # For binary classification, we need probabilities. Use encoded labels if available.
+                    # Since we stored the test data with original labels, we can get encoded y_test from session if needed.
+                    # But for simplicity, we check if the model's predict_proba returns two columns.
                     y_proba = model.predict_proba(X_test)
                     if y_proba.shape[1] == 2:
-                        fpr, tpr, _ = roc_curve(y_test, y_proba[:, 1], pos_label=labels[1])
-                        roc_auc = auc(fpr, tpr)
-                        fig_roc = go.Figure()
-                        fig_roc.add_trace(go.Scatter(x=fpr, y=tpr, mode='lines', name=f'ROC (AUC={roc_auc:.3f})'))
-                        fig_roc.add_trace(go.Scatter(x=[0,1], y=[0,1], mode='lines', name='Random', line=dict(dash='dash')))
-                        fig_roc.update_layout(xaxis_title='False Positive Rate', yaxis_title='True Positive Rate',
-                                              title='ROC Curve')
-                        st.plotly_chart(fig_roc, use_container_width=True)
+                        # We need the true labels in numeric form for roc_curve. Use label encoder from training.
+                        if st.session_state.label_encoder is not None:
+                            y_test_encoded = st.session_state.label_encoder.transform(y_test_str)
+                            pos_label = 1  # After encoding, positive class is 1
+                            fpr, tpr, _ = roc_curve(y_test_encoded, y_proba[:, 1], pos_label=pos_label)
+                            roc_auc = auc(fpr, tpr)
+                            fig_roc = go.Figure()
+                            fig_roc.add_trace(go.Scatter(x=fpr, y=tpr, mode='lines', name=f'ROC (AUC={roc_auc:.3f})'))
+                            fig_roc.add_trace(go.Scatter(x=[0,1], y=[0,1], mode='lines', name='Random', line=dict(dash='dash')))
+                            fig_roc.update_layout(xaxis_title='False Positive Rate', yaxis_title='True Positive Rate',
+                                                  title='ROC Curve')
+                            st.plotly_chart(fig_roc, use_container_width=True)
 
-                        precisions, recalls, _ = precision_recall_curve(y_test, y_proba[:, 1], pos_label=labels[1])
-                        fig_pr = go.Figure()
-                        fig_pr.add_trace(go.Scatter(x=recalls, y=precisions, mode='lines', name='PR Curve'))
-                        fig_pr.update_layout(xaxis_title='Recall', yaxis_title='Precision',
-                                             title='Precision-Recall Curve')
-                        st.plotly_chart(fig_pr, use_container_width=True)
+                            precisions, recalls, _ = precision_recall_curve(y_test_encoded, y_proba[:, 1], pos_label=pos_label)
+                            fig_pr = go.Figure()
+                            fig_pr.add_trace(go.Scatter(x=recalls, y=precisions, mode='lines', name='PR Curve'))
+                            fig_pr.update_layout(xaxis_title='Recall', yaxis_title='Precision',
+                                                 title='Precision-Recall Curve')
+                            st.plotly_chart(fig_pr, use_container_width=True)
                 except Exception as e:
                     st.info(f"Could not compute ROC/PR curves: {e}")
 
-            # --- Threshold tuning ---
-            if hasattr(model, 'predict_proba') and len(labels) == 2:
+            # --- Threshold tuning (binary) ---
+            if hasattr(model, 'predict_proba') and st.session_state.label_encoder is not None and len(np.unique(y_test_str)) == 2:
                 st.markdown("### ⚙️ Decision Threshold Tuning & Cost Simulation")
                 st.write("Adjust the classification threshold to optimize for your business needs.")
                 y_proba = model.predict_proba(X_test)[:, 1]
                 threshold = st.slider("Threshold", 0.0, 1.0, 0.5, 0.01)
                 y_pred_adj = (y_proba >= threshold).astype(int)
-                unique_labels = sorted(set(y_test))
-                if len(unique_labels) == 2:
-                    label_map = {0: unique_labels[0], 1: unique_labels[1]}
-                    y_pred_adj_labels = np.array([label_map[x] for x in y_pred_adj])
-                else:
-                    y_pred_adj_labels = y_pred_adj.astype(str)
+                # Decode to original labels
+                y_pred_adj_labels = st.session_state.label_encoder.inverse_transform(y_pred_adj)
 
-                tn, fp, fn, tp = confusion_matrix(y_test, y_pred_adj_labels).ravel()
+                tn, fp, fn, tp = confusion_matrix(y_test_str, y_pred_adj_labels).ravel()
                 st.markdown("**Simulate business costs:**")
                 col1, col2 = st.columns(2)
                 with col1:
@@ -1044,9 +1050,9 @@ def evaluation_page():
                 total_cost = fp * cost_fp + fn * cost_fn
                 st.metric("Total Simulated Cost", f"${total_cost:,.2f}")
 
-                adj_acc = accuracy_score(y_test, y_pred_adj_labels)
-                adj_prec = precision_score(y_test, y_pred_adj_labels, average='binary', pos_label=unique_labels[1])
-                adj_rec = recall_score(y_test, y_pred_adj_labels, average='binary', pos_label=unique_labels[1])
+                adj_acc = accuracy_score(y_test_str, y_pred_adj_labels)
+                adj_prec = precision_score(y_test_str, y_pred_adj_labels, average='binary', pos_label=st.session_state.label_encoder.classes_[1])
+                adj_rec = recall_score(y_test_str, y_pred_adj_labels, average='binary', pos_label=st.session_state.label_encoder.classes_[1])
                 st.write(f"At threshold {threshold:.2f}: Accuracy={adj_acc:.4f}, Precision={adj_prec:.4f}, Recall={adj_rec:.4f}")
 
             # --- Feature importance ---
@@ -1060,7 +1066,7 @@ def evaluation_page():
             # --- Detailed classification report ---
             st.markdown("### 📝 Detailed Classification Report")
             try:
-                report = classification_report(y_test, predictions, output_dict=True, zero_division=0)
+                report = classification_report(y_test_str, predictions_str, output_dict=True, zero_division=0)
                 report_df = pd.DataFrame(report).transpose()
                 st.dataframe(report_df, use_container_width=True)
             except Exception as e:
@@ -1084,11 +1090,11 @@ def evaluation_page():
                 report_lines.append(f"- Weighted F1: {f1:.4f}")
                 report_lines.append("")
                 report_lines.append("### Confusion Matrix")
-                cm_str = np.array2string(confusion_matrix(y_test, predictions))
+                cm_str = np.array2string(confusion_matrix(y_test_str, predictions_str))
                 report_lines.append(cm_str)
                 report_lines.append("")
                 report_lines.append("### Classification Report")
-                report_lines.append(classification_report(y_test, predictions, zero_division=0))
+                report_lines.append(classification_report(y_test_str, predictions_str, zero_division=0))
                 report_lines.append("")
                 report_lines.append("## Best Model")
                 report_lines.append(str(model.model))
@@ -1290,7 +1296,7 @@ def evaluation_page():
         st.error(f"Unknown error occurred during evaluation: {str(e)}")
         st.info("Please try retraining the model or check the data format.")
 
-# ---------- Training page ----------
+# ---------- Training page (fixed: encode classification target) ----------
 def training_page():
     st.markdown('<h2 class="sub-header">📐 Automated Model Training with FLAML</h2>', unsafe_allow_html=True)
 
@@ -1370,19 +1376,41 @@ def training_page():
         X_train, X_test, y_train, y_test = train_test_split(
             X, y, test_size=test_size, random_state=random_state
         )
+
+        # Store test data (original labels) for evaluation
         st.session_state.test_data = {'X_test': X_test, 'y_test': y_test}
+
+        # For classification, encode target labels to integers
+        encoder = None
+        if problem_type == "Classification":
+            encoder = LabelEncoder()
+            y_train_encoded = encoder.fit_transform(y_train)
+            y_test_encoded = encoder.transform(y_test)
+            # Store encoder to decode predictions later
+            st.session_state.label_encoder = encoder
+        else:
+            y_train_encoded = y_train
+            y_test_encoded = y_test
 
         with st.spinner("🧠 FLAML is searching for the best model. This may take several minutes..."):
             try:
                 task = 'classification' if problem_type == 'Classification' else 'regression'
                 metric = 'accuracy' if task == 'classification' else 'r2'
-                estimator_list = (
-                    ["lgbm", "rf", "lrl1"] if task == "classification" else ["lgbm", "rf", "lrl2"]
-                )
+
+                # Adjust estimator list for classification: avoid 'lrl1' for multiclass
+                if task == 'classification':
+                    # Check if target is binary (after encoding)
+                    if len(np.unique(y_train_encoded)) == 2:
+                        estimator_list = ["lgbm", "rf", "lrl1"]  # L1 logistic works for binary
+                    else:
+                        estimator_list = ["lgbm", "rf"]  # tree-based models for multiclass
+                else:
+                    # Regression: use tree-based and linear
+                    estimator_list = ["lgbm", "rf", "lrl2"]
 
                 automl = AutoML()
                 automl.fit(
-                    X_train, y_train,
+                    X_train, y_train_encoded,
                     task=task,
                     time_budget=time_budget_mins * 60,
                     metric=metric,
@@ -1394,25 +1422,34 @@ def training_page():
                     verbose=0
                 )
 
-                # Save the trained model and predictions
-                y_pred = automl.predict(X_test)
-                score = automl.score(X_test, y_test)
+                # Predict on test set (encoded)
+                y_pred_encoded = automl.predict(X_test)
+
+                # Decode predictions if classification
+                if problem_type == "Classification" and encoder is not None:
+                    y_pred = encoder.inverse_transform(y_pred_encoded.astype(int))
+                else:
+                    y_pred = y_pred_encoded
+
+                # Compute score on test set (using encoded for classification to avoid mismatch)
+                if problem_type == "Classification":
+                    score = accuracy_score(y_test_encoded, y_pred_encoded)
+                else:
+                    score = automl.score(X_test, y_test)
 
                 # Store in session state
                 st.session_state.model = automl
                 st.session_state.predictions = y_pred
                 st.session_state.training_complete = True
 
-                # Show results in an expander (safe now because automl is valid)
+                # Show results in an expander
                 with st.expander("📊 Training Results (click to expand)", expanded=True):
                     col_res1, col_res2 = st.columns(2)
                     with col_res1:
                         st.markdown("#### 🏆 Best Model")
-                        # Safe: automl.model exists after successful fit
                         st.code(str(automl.model), language='python')
                     with col_res2:
                         st.markdown("#### ⚙️ Best Hyperparameters")
-                        # Safe: automl.best_config exists after successful fit
                         st.json(automl.best_config)
 
                     st.markdown(f"#### 📈 Test Score ({metric}): **{score:.4f}**")
@@ -1422,9 +1459,7 @@ def training_page():
                 st.rerun()
 
             except Exception as e:
-                # Show the exact error to help debugging (remove in production if needed)
                 st.error(f"❌ Training failed: {type(e).__name__}: {str(e)}")
-                # Also log it (optional)
                 print(f"Training error: {type(e).__name__}: {e}")
 
 # ---------- Export page ----------
@@ -1505,7 +1540,7 @@ This model was generated using FLAML AutoML through the No-Code ML Platform.
     st.warning("This will clear all data and models from the current session.")
     if st.button("🔄 Reset All Data", type="secondary"):
         keys = ["data", "target_column", "problem_type", "model", "predictions", "test_data", "training_complete",
-                "cleaned_data"]
+                "cleaned_data", "label_encoder"]
         for key in keys:
             if key in st.session_state:
                 st.session_state[key] = None
@@ -1576,7 +1611,7 @@ def dashboard_page():
             st.session_state.logged_in = False
             st.session_state.user_name = ""
             keys = ["data", "target_column", "problem_type", "model", "predictions", "test_data", "training_complete",
-                    "cleaned_data"]
+                    "cleaned_data", "label_encoder"]
             for key in keys:
                 if key in st.session_state:
                     st.session_state[key] = None
