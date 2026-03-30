@@ -36,7 +36,7 @@ except ImportError:
 
 # ---------- Minimal PDF generator (no extra installs) ----------
 def _pdf_escape(text: str) -> str:
-    return text.encode('ascii', 'ignore').decode('ascii').replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+    return text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
 
 def text_to_simple_pdf_bytes(text: str, title: str = "ML Model Report") -> bytes:
     page_w, page_h = 612, 792
@@ -138,31 +138,29 @@ def get_base64_of_file(file_path):
     except FileNotFoundError:
         return None
 
-def set_bg_image_local(image_base_name):
-    for ext in ['.jpg', '.png']:
-        full_path = image_base_name + ext
-        bin_str = get_base64_of_file(full_path)
-        if bin_str:
-            page_bg_img = f"""
-            <style>
-            .stApp {{
-                background-image: url("data:image/jpg;base64,{bin_str}");
-                background-size: cover;
-                background-repeat: no-repeat;
-                background-attachment: fixed;
-            }}
-            </style>
-            """
-            st.markdown(page_bg_img, unsafe_allow_html=True)
-            return
-    fallback_bg = """
-    <style>
-    .stApp {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    }
-    </style>
-    """
-    st.markdown(fallback_bg, unsafe_allow_html=True)
+def set_bg_image_local(image_path):
+    bin_str = get_base64_of_file(image_path)
+    if bin_str:
+        page_bg_img = f"""
+        <style>
+        .stApp {{
+            background-image: url("data:image/jpg;base64,{bin_str}");
+            background-size: cover;
+            background-repeat: no-repeat;
+            background-attachment: fixed;
+        }}
+        </style>
+        """
+        st.markdown(page_bg_img, unsafe_allow_html=True)
+    else:
+        fallback_bg = """
+        <style>
+        .stApp {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+        </style>
+        """
+        st.markdown(fallback_bg, unsafe_allow_html=True)
 
 # ---------- Password hashing helpers ----------
 def hash_password(password: str, iterations: int = 100_000) -> str:
@@ -292,7 +290,7 @@ st.markdown("""
 
 # ---------- Front page ----------
 def front_page():
-    set_bg_image_local("FrontPage")
+    set_bg_image_local("FrontPage.jpg")
     st.markdown("""
     <style>
     .right-panel {
@@ -356,7 +354,7 @@ def front_page():
 
 # ---------- Login/Register page ----------
 def login_page():
-    set_bg_image_local("login")
+    set_bg_image_local("login.jpg")
     st.markdown("""
     <style>
     .stApp {
@@ -1415,7 +1413,7 @@ This model was generated using PyCaret AutoML through the No-Code ML Platform.
 
 # ---------- Dashboard ----------
 def dashboard_page():
-    set_bg_image_local("purple")
+    set_bg_image_local("purple.jpg")
 
     st.markdown("""
     <style>
