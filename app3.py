@@ -36,11 +36,10 @@ except ImportError:
 
 # ---------- Minimal PDF generator (no extra installs) ----------
 def _pdf_escape(text: str) -> str:
-    # Replace non-ASCII characters to avoid PDF errors
     return text.encode('ascii', 'ignore').decode('ascii').replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
 
 def text_to_simple_pdf_bytes(text: str, title: str = "ML Model Report") -> bytes:
-    page_w, page_h = 612, 792  # US Letter points
+    page_w, page_h = 612, 792
     margin_x, margin_y = 54, 54
     font_size = 10
     leading = 14
@@ -476,7 +475,7 @@ if "cleaned_data" not in st.session_state:
 if "label_encoder" not in st.session_state:
     st.session_state.label_encoder = None
 
-# ---------- Helper function for cleaning (used in both preview and apply) ----------
+# ---------- Helper function for cleaning ----------
 def apply_cleaning(df, drop_duplicates, missing_option, outlier_option, encode_option, scale_option, cols_to_drop):
     cleaned = df.copy()
 
@@ -562,8 +561,7 @@ def upload_page():
         """, unsafe_allow_html=True)
         uploaded_file = st.file_uploader("Choose a CSV file", type=['csv'])
         if uploaded_file is not None:
-            # Check file size (in bytes)
-            if uploaded_file.size > 200 * 1024 * 1024:  # 200 MB
+            if uploaded_file.size > 200 * 1024 * 1024:
                 st.warning("File size exceeds 200 MB. Large files may cause performance issues. Consider using a subset.")
             try:
                 df = pd.read_csv(uploaded_file)
@@ -653,11 +651,9 @@ def cleaning_page():
             "Feature scaling (numerical)",
             ["None", "Standardization (z-score)", "Normalization (min-max)"]
         )
-        # Prevent dropping target column
-        cols_to_drop = st.multiselect("Select columns to drop", 
+        cols_to_drop = st.multiselect("Select columns to drop",
                                       [c for c in original_df.columns if c != st.session_state.target_column])
 
-        # Preview cleaning
         if st.button("🔍 Preview Cleaning", type="secondary"):
             cleaned = apply_cleaning(original_df, drop_duplicates, missing_option, outlier_option,
                                      encode_option, scale_option, cols_to_drop)
@@ -671,7 +667,6 @@ def cleaning_page():
     with col2:
         if st.session_state.cleaned_data is not None:
             if st.button("✅ Apply Cleaning and Continue", type="primary", use_container_width=True):
-                # Actually apply cleaning (re-run to ensure consistency)
                 cleaned = apply_cleaning(original_df, drop_duplicates, missing_option, outlier_option,
                                          encode_option, scale_option, cols_to_drop)
                 st.session_state.data = cleaned
@@ -741,8 +736,9 @@ def eda_page():
             with col2:
                 fig = px.box(df, y=selected_num_col, title=f"Box Plot of {selected_num_col}")
                 st.plotly_chart(fig, use_container_width=True)
-            stats = df[selected_num_col].describe()
-            st.dataframe(stats, use_container_width=True)
+            # ✅ FIX: renamed from 'stats' to 'col_stats' to avoid overwriting scipy.stats
+            col_stats = df[selected_num_col].describe()
+            st.dataframe(col_stats, use_container_width=True)
 
     categorical_cols = df.select_dtypes(include=['object']).columns.tolist()
     if categorical_cols:
@@ -818,7 +814,6 @@ def training_page():
     target_col = st.session_state.target_column
     problem_type = st.session_state.problem_type
 
-    # Warn for high cardinality in classification
     if problem_type == "Classification" and df[target_col].nunique() > 20:
         st.warning(f"Target column has {df[target_col].nunique()} unique values. Classification may be slow or have low accuracy. Consider regression or reduce categories.")
 
@@ -960,7 +955,7 @@ def training_page():
                 st.error(f"❌ Training failed: {type(e).__name__}: {str(e)}")
                 print(f"Training error: {type(e).__name__}: {e}")
 
-# Helper to generate report text
+# ---------- Helper to generate report text ----------
 def generate_report_text(problem_type, metrics, model, target_col, dataset_shape=None):
     lines = []
     lines.append("# Machine Learning Model Evaluation Report")
@@ -1022,7 +1017,6 @@ def evaluation_page():
                 elif hasattr(model, 'coef_'):
                     coef = model.coef_
                     if coef.ndim == 2:
-                        # Multi-class: take mean absolute coefficients per feature
                         imp_df = pd.DataFrame({'feature': feature_names, 'importance': np.abs(coef).mean(axis=0)})
                         imp_df = imp_df.sort_values('importance', ascending=False)
                         st.markdown("#### Mean Absolute Coefficients (Multi-class)")
@@ -1032,9 +1026,9 @@ def evaluation_page():
                         st.markdown("#### Coefficients (Top 20)")
                     st.dataframe(imp_df.head(20), use_container_width=True)
                 else:
-                    st.info("当前模型不支持特征重要性或系数展示。")
+                    st.info("This model does not support feature importance display.")
             except Exception as e:
-                st.warning(f"特征重要性展示失败：{e}")
+                st.warning(f"Feature importance display failed: {e}")
 
         if problem_type == "Classification":
             y_test_str = y_test.astype(str)
@@ -1099,18 +1093,14 @@ def evaluation_page():
             except Exception as e:
                 st.error(f"Failed to generate confusion matrix: {e}")
 
-            # ROC and PR curves for binary classification
             if hasattr(model, 'predict_proba') and len(np.unique(y_test_str)) == 2:
                 try:
-                    # Determine positive class (assume second class from model's classes)
                     if hasattr(model, 'classes_'):
                         pos_class = model.classes_[1]
                     else:
-                        # Fallback: use label encoding to find positive label
                         le = LabelEncoder()
                         le.fit(y_test_str)
                         pos_class = le.classes_[1]
-                    # Get probability for positive class
                     y_proba = model.predict_proba(X_test)[:, 1]
                     y_test_num = (y_test_str == pos_class).astype(int)
 
@@ -1132,14 +1122,12 @@ def evaluation_page():
                 except Exception as e:
                     st.info(f"Could not compute ROC/PR curves: {e}")
 
-            # Threshold tuning (binary)
             if hasattr(model, 'predict_proba') and len(np.unique(y_test_str)) == 2:
                 st.markdown("### ⚙️ Decision Threshold Tuning & Cost Simulation")
                 st.write("Adjust the classification threshold to optimize for your business needs.")
                 y_proba = model.predict_proba(X_test)[:, 1]
                 threshold = st.slider("Threshold", 0.0, 1.0, 0.5, 0.01)
                 y_pred_adj = (y_proba >= threshold).astype(int)
-                # Map back to original labels
                 if hasattr(model, 'classes_'):
                     le = LabelEncoder()
                     le.fit(model.classes_)
@@ -1174,7 +1162,6 @@ def evaluation_page():
             st.markdown("---")
             metrics = {"Accuracy": acc, "Weighted Precision": prec, "Weighted Recall": rec, "Weighted F1": f1}
             report_text = generate_report_text("Classification", metrics, model, st.session_state.target_column)
-            # Add confusion matrix and classification report to text
             report_text += "\n\n### Confusion Matrix\n" + str(confusion_matrix(y_test_str, predictions_str))
             report_text += "\n\n### Classification Report\n" + classification_report(y_test_str, predictions_str, zero_division=0)
 
@@ -1312,7 +1299,7 @@ def evaluation_page():
                     fig_imp = px.bar(imp_df, x='importance', y='feature', orientation='h', title='Feature Coefficients')
                     st.plotly_chart(fig_imp, use_container_width=True)
             except Exception as e:
-                st.warning(f"无法绘制特征重要性图：{e}")
+                st.warning(f"Could not plot feature importance: {e}")
 
         st.markdown("---")
         _, col2, _ = st.columns([1, 2, 1])
@@ -1342,7 +1329,6 @@ def export_page():
         st.markdown("#### 📊 Model Information")
         if st.button("Show Model Details"):
             st.write("**Best Model:**", st.session_state.model)
-        # Download model
         if st.button("💾 Download Model (pickle)"):
             model_bytes = pickle.dumps(st.session_state.model)
             st.download_button(
