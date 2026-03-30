@@ -2,12 +2,12 @@ import streamlit as st
 import os
 import base64
 import hashlib
-import pandas as pd
+import pandas as pd 
 import numpy as np
 from datetime import datetime
 from typing import List
-import matplotlib.pyplot as plt
-import seaborn as sns
+import matplotlib.pyplot as plt 
+import seaborn as sns 
 import plotly.express as px
 import plotly.graph_objects as go
 from sklearn.model_selection import train_test_split
@@ -22,26 +22,22 @@ import warnings
 warnings.filterwarnings('ignore')
 
 from supabase import create_client
+import scipy.stats as stats  # for outlier detection
+import pickle  # for model serialization
 
 # ---------- PyCaret imports ----------
 try:
-    from pycaret.classification import setup as clf_setup, compare_models as clf_compare, predict_model as clf_predict, get_config, pull, save_model
+    from pycaret.classification import setup as clf_setup, compare_models as clf_compare, predict_model as clf_predict, get_config, pull, save_model as pycaret_save_model
     from pycaret.regression import setup as reg_setup, compare_models as reg_compare, predict_model as reg_predict
     PYCARET_AVAILABLE = True
 except ImportError:
     PYCARET_AVAILABLE = False
     st.warning("⚠️ PyCaret not installed. Install with 'pip install pycaret' to use AutoML.")
 
-# ---------- Optional SHAP for deeper explanations ----------
-try:
-    import shap
-    SHAP_AVAILABLE = True
-except ImportError:
-    SHAP_AVAILABLE = False
-
 # ---------- Minimal PDF generator (no extra installs) ----------
 def _pdf_escape(text: str) -> str:
-    return text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+    # Replace non-ASCII characters to avoid PDF errors
+    return text.encode('ascii', 'ignore').decode('ascii').replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
 
 def text_to_simple_pdf_bytes(text: str, title: str = "ML Model Report") -> bytes:
     page_w, page_h = 612, 792  # US Letter points
@@ -480,6 +476,74 @@ if "cleaned_data" not in st.session_state:
 if "label_encoder" not in st.session_state:
     st.session_state.label_encoder = None
 
+# ---------- Helper function for cleaning (used in both preview and apply) ----------
+def apply_cleaning(df, drop_duplicates, missing_option, outlier_option, encode_option, scale_option, cols_to_drop):
+    cleaned = df.copy()
+
+    if drop_duplicates:
+        cleaned = cleaned.drop_duplicates()
+
+    if missing_option != "None":
+        if missing_option == "Drop rows with any missing":
+            cleaned = cleaned.dropna()
+        elif missing_option == "Drop columns with any missing":
+            cleaned = cleaned.dropna(axis=1)
+        elif missing_option == "Fill numeric with mean":
+            num_cols = cleaned.select_dtypes(include=[np.number]).columns
+            for col in num_cols:
+                cleaned[col] = cleaned[col].fillna(cleaned[col].mean())
+        elif missing_option == "Fill numeric with median":
+            num_cols = cleaned.select_dtypes(include=[np.number]).columns
+            for col in num_cols:
+                cleaned[col] = cleaned[col].fillna(cleaned[col].median())
+        elif missing_option == "Fill categorical with mode":
+            cat_cols = cleaned.select_dtypes(include=['object']).columns
+            for col in cat_cols:
+                cleaned[col] = cleaned[col].fillna(cleaned[col].mode()[0] if not cleaned[col].mode().empty else "Unknown")
+
+    if outlier_option != "None":
+        num_cols = cleaned.select_dtypes(include=[np.number]).columns
+        if outlier_option == "Remove rows with Z-score > 3":
+            if len(num_cols) > 0:
+                numeric_subset = cleaned[num_cols].dropna()
+                if not numeric_subset.empty:
+                    z_scores = np.abs(stats.zscore(numeric_subset, nan_policy='omit'))
+                    if np.ndim(z_scores) == 1:
+                        z_scores = z_scores.reshape(-1, 1)
+                    outlier_rows = (z_scores > 3).any(axis=1)
+                    outlier_idx = numeric_subset.index[outlier_rows]
+                    cleaned = cleaned.drop(index=outlier_idx)
+        elif outlier_option == "Cap at 1st and 99th percentile":
+            for col in num_cols:
+                q1 = cleaned[col].quantile(0.01)
+                q99 = cleaned[col].quantile(0.99)
+                cleaned[col] = cleaned[col].clip(lower=q1, upper=q99)
+
+    if encode_option != "None":
+        cat_cols = cleaned.select_dtypes(include=['object']).columns
+        if len(cat_cols) > 0:
+            if encode_option == "Label Encoding":
+                for col in cat_cols:
+                    le = LabelEncoder()
+                    cleaned[col] = le.fit_transform(cleaned[col].astype(str))
+            elif encode_option == "One-Hot Encoding":
+                cleaned = pd.get_dummies(cleaned, columns=cat_cols, drop_first=True)
+
+    if scale_option != "None":
+        num_cols = cleaned.select_dtypes(include=[np.number]).columns
+        if len(num_cols) > 0:
+            if scale_option == "Standardization (z-score)":
+                scaler = StandardScaler()
+                cleaned[num_cols] = scaler.fit_transform(cleaned[num_cols])
+            elif scale_option == "Normalization (min-max)":
+                scaler = MinMaxScaler()
+                cleaned[num_cols] = scaler.fit_transform(cleaned[num_cols])
+
+    if cols_to_drop:
+        cleaned = cleaned.drop(columns=cols_to_drop)
+
+    return cleaned
+
 # ---------- Dashboard subpages ----------
 def upload_page():
     st.markdown('<h2 class="sub-header">📁 Upload Your Dataset</h2>', unsafe_allow_html=True)
@@ -498,6 +562,9 @@ def upload_page():
         """, unsafe_allow_html=True)
         uploaded_file = st.file_uploader("Choose a CSV file", type=['csv'])
         if uploaded_file is not None:
+            # Check file size (in bytes)
+            if uploaded_file.size > 200 * 1024 * 1024:  # 200 MB
+                st.warning("File size exceeds 200 MB. Large files may cause performance issues. Consider using a subset.")
             try:
                 df = pd.read_csv(uploaded_file)
                 st.session_state.data = df
@@ -586,91 +653,14 @@ def cleaning_page():
             "Feature scaling (numerical)",
             ["None", "Standardization (z-score)", "Normalization (min-max)"]
         )
-        cols_to_drop = st.multiselect("Select columns to drop", original_df.columns.tolist())
+        # Prevent dropping target column
+        cols_to_drop = st.multiselect("Select columns to drop", 
+                                      [c for c in original_df.columns if c != st.session_state.target_column])
 
+        # Preview cleaning
         if st.button("🔍 Preview Cleaning", type="secondary"):
-            cleaned = original_df.copy()
-
-            if drop_duplicates:
-                cleaned = cleaned.drop_duplicates()
-                st.info(f"Dropped duplicates, new shape: {cleaned.shape}")
-
-            if missing_option != "None":
-                if missing_option == "Drop rows with any missing":
-                    cleaned = cleaned.dropna()
-                    st.info(f"Dropped rows with missing values, new shape: {cleaned.shape}")
-                elif missing_option == "Drop columns with any missing":
-                    cleaned = cleaned.dropna(axis=1)
-                    st.info(f"Dropped columns with missing values, new shape: {cleaned.shape}")
-                elif missing_option == "Fill numeric with mean":
-                    num_cols = cleaned.select_dtypes(include=[np.number]).columns
-                    for col in num_cols:
-                        cleaned[col] = cleaned[col].fillna(cleaned[col].mean())
-                    st.info("Filled numeric missing values with mean.")
-                elif missing_option == "Fill numeric with median":
-                    num_cols = cleaned.select_dtypes(include=[np.number]).columns
-                    for col in num_cols:
-                        cleaned[col] = cleaned[col].fillna(cleaned[col].median())
-                    st.info("Filled numeric missing values with median.")
-                elif missing_option == "Fill categorical with mode":
-                    cat_cols = cleaned.select_dtypes(include=['object']).columns
-                    for col in cat_cols:
-                        cleaned[col] = cleaned[col].fillna(cleaned[col].mode()[0] if not cleaned[col].mode().empty else "Unknown")
-                    st.info("Filled categorical missing values with mode.")
-
-            if outlier_option != "None":
-                num_cols = cleaned.select_dtypes(include=[np.number]).columns
-                if outlier_option == "Remove rows with Z-score > 3":
-                    from scipy import stats
-                    if len(num_cols) == 0:
-                        st.warning("No numerical columns found for outlier removal.")
-                    else:
-                        numeric_subset = cleaned[num_cols].dropna()
-                        if numeric_subset.empty:
-                            st.warning("No complete numerical rows available.")
-                        else:
-                            z_scores = np.abs(stats.zscore(numeric_subset, nan_policy='omit'))
-                            if np.ndim(z_scores) == 1:
-                                z_scores = z_scores.reshape(-1, 1)
-                            outlier_rows = (z_scores > 3).any(axis=1)
-                            outlier_idx = numeric_subset.index[outlier_rows]
-                            cleaned = cleaned.drop(index=outlier_idx)
-                            st.info(f"Removed rows with Z-score > 3, new shape: {cleaned.shape}")
-                elif outlier_option == "Cap at 1st and 99th percentile":
-                    for col in num_cols:
-                        q1 = cleaned[col].quantile(0.01)
-                        q99 = cleaned[col].quantile(0.99)
-                        cleaned[col] = cleaned[col].clip(lower=q1, upper=q99)
-                    st.info("Capped outliers at 1st and 99th percentiles.")
-
-            if encode_option != "None":
-                cat_cols = cleaned.select_dtypes(include=['object']).columns
-                if len(cat_cols) > 0:
-                    if encode_option == "Label Encoding":
-                        for col in cat_cols:
-                            le = LabelEncoder()
-                            cleaned[col] = le.fit_transform(cleaned[col].astype(str))
-                        st.info("Applied Label Encoding.")
-                    elif encode_option == "One-Hot Encoding":
-                        cleaned = pd.get_dummies(cleaned, columns=cat_cols, drop_first=True)
-                        st.info("Applied One-Hot Encoding.")
-
-            if scale_option != "None":
-                num_cols = cleaned.select_dtypes(include=[np.number]).columns
-                if len(num_cols) > 0:
-                    if scale_option == "Standardization (z-score)":
-                        scaler = StandardScaler()
-                        cleaned[num_cols] = scaler.fit_transform(cleaned[num_cols])
-                        st.info("Applied Standardization.")
-                    elif scale_option == "Normalization (min-max)":
-                        scaler = MinMaxScaler()
-                        cleaned[num_cols] = scaler.fit_transform(cleaned[num_cols])
-                        st.info("Applied Min-Max Normalization.")
-
-            if cols_to_drop:
-                cleaned = cleaned.drop(columns=cols_to_drop)
-                st.info(f"Dropped selected columns, new shape: {cleaned.shape}")
-
+            cleaned = apply_cleaning(original_df, drop_duplicates, missing_option, outlier_option,
+                                     encode_option, scale_option, cols_to_drop)
             st.markdown("### Cleaned Data Preview")
             st.dataframe(cleaned.head())
             st.markdown(f"Final shape: {cleaned.shape}")
@@ -681,7 +671,10 @@ def cleaning_page():
     with col2:
         if st.session_state.cleaned_data is not None:
             if st.button("✅ Apply Cleaning and Continue", type="primary", use_container_width=True):
-                st.session_state.data = st.session_state.cleaned_data
+                # Actually apply cleaning (re-run to ensure consistency)
+                cleaned = apply_cleaning(original_df, drop_duplicates, missing_option, outlier_option,
+                                         encode_option, scale_option, cols_to_drop)
+                st.session_state.data = cleaned
                 st.session_state.cleaned_data = None
                 st.success("Data cleaned successfully!")
                 st.session_state.app_page = "🔍 Exploratory Data Analysis"
@@ -825,6 +818,10 @@ def training_page():
     target_col = st.session_state.target_column
     problem_type = st.session_state.problem_type
 
+    # Warn for high cardinality in classification
+    if problem_type == "Classification" and df[target_col].nunique() > 20:
+        st.warning(f"Target column has {df[target_col].nunique()} unique values. Classification may be slow or have low accuracy. Consider regression or reduce categories.")
+
     st.markdown(f"""
     <div class="card">
     <h4>Training Configuration</h4>
@@ -963,6 +960,24 @@ def training_page():
                 st.error(f"❌ Training failed: {type(e).__name__}: {str(e)}")
                 print(f"Training error: {type(e).__name__}: {e}")
 
+# Helper to generate report text
+def generate_report_text(problem_type, metrics, model, target_col, dataset_shape=None):
+    lines = []
+    lines.append("# Machine Learning Model Evaluation Report")
+    lines.append(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    lines.append(f"Problem Type: {problem_type}")
+    lines.append(f"Target Column: {target_col}")
+    if dataset_shape:
+        lines.append(f"Dataset Shape: {dataset_shape}")
+    lines.append("")
+    lines.append("## Performance Summary")
+    for key, val in metrics.items():
+        lines.append(f"- {key}: {val:.4f}" if isinstance(val, float) else f"- {key}: {val}")
+    lines.append("")
+    lines.append("## Best Model")
+    lines.append(str(model))
+    return "\n".join(lines)
+
 def evaluation_page():
     st.markdown('<h2 class="sub-header">📈 Model Performance Evaluation</h2>', unsafe_allow_html=True)
 
@@ -1005,11 +1020,17 @@ def evaluation_page():
                     imp_df = imp_df.sort_values('importance', ascending=False)
                     st.dataframe(imp_df, use_container_width=True)
                 elif hasattr(model, 'coef_'):
-                    st.markdown("#### Coefficients (Top 20)")
-                    coef = model.coef_.ravel()
-                    imp_df = pd.DataFrame({'feature': feature_names, 'coefficient': coef})
-                    imp_df = imp_df.sort_values('coefficient', ascending=False)
-                    st.dataframe(imp_df, use_container_width=True)
+                    coef = model.coef_
+                    if coef.ndim == 2:
+                        # Multi-class: take mean absolute coefficients per feature
+                        imp_df = pd.DataFrame({'feature': feature_names, 'importance': np.abs(coef).mean(axis=0)})
+                        imp_df = imp_df.sort_values('importance', ascending=False)
+                        st.markdown("#### Mean Absolute Coefficients (Multi-class)")
+                    else:
+                        imp_df = pd.DataFrame({'feature': feature_names, 'coefficient': coef})
+                        imp_df = imp_df.sort_values('coefficient', ascending=False)
+                        st.markdown("#### Coefficients (Top 20)")
+                    st.dataframe(imp_df.head(20), use_container_width=True)
                 else:
                     st.info("当前模型不支持特征重要性或系数展示。")
             except Exception as e:
@@ -1078,11 +1099,20 @@ def evaluation_page():
             except Exception as e:
                 st.error(f"Failed to generate confusion matrix: {e}")
 
+            # ROC and PR curves for binary classification
             if hasattr(model, 'predict_proba') and len(np.unique(y_test_str)) == 2:
                 try:
-                    le = LabelEncoder()
-                    y_test_num = le.fit_transform(y_test_str)
+                    # Determine positive class (assume second class from model's classes)
+                    if hasattr(model, 'classes_'):
+                        pos_class = model.classes_[1]
+                    else:
+                        # Fallback: use label encoding to find positive label
+                        le = LabelEncoder()
+                        le.fit(y_test_str)
+                        pos_class = le.classes_[1]
+                    # Get probability for positive class
                     y_proba = model.predict_proba(X_test)[:, 1]
+                    y_test_num = (y_test_str == pos_class).astype(int)
 
                     fpr, tpr, _ = roc_curve(y_test_num, y_proba)
                     roc_auc = auc(fpr, tpr)
@@ -1102,14 +1132,20 @@ def evaluation_page():
                 except Exception as e:
                     st.info(f"Could not compute ROC/PR curves: {e}")
 
+            # Threshold tuning (binary)
             if hasattr(model, 'predict_proba') and len(np.unique(y_test_str)) == 2:
                 st.markdown("### ⚙️ Decision Threshold Tuning & Cost Simulation")
                 st.write("Adjust the classification threshold to optimize for your business needs.")
                 y_proba = model.predict_proba(X_test)[:, 1]
                 threshold = st.slider("Threshold", 0.0, 1.0, 0.5, 0.01)
                 y_pred_adj = (y_proba >= threshold).astype(int)
-                le = LabelEncoder()
-                le.fit(y_test_str)
+                # Map back to original labels
+                if hasattr(model, 'classes_'):
+                    le = LabelEncoder()
+                    le.fit(model.classes_)
+                else:
+                    le = LabelEncoder()
+                    le.fit(y_test_str)
                 y_pred_adj_labels = le.inverse_transform(y_pred_adj)
 
                 tn, fp, fn, tp = confusion_matrix(y_test_str, y_pred_adj_labels).ravel()
@@ -1136,30 +1172,15 @@ def evaluation_page():
                 st.error(f"Failed to generate classification report: {e}")
 
             st.markdown("---")
+            metrics = {"Accuracy": acc, "Weighted Precision": prec, "Weighted Recall": rec, "Weighted F1": f1}
+            report_text = generate_report_text("Classification", metrics, model, st.session_state.target_column)
+            # Add confusion matrix and classification report to text
+            report_text += "\n\n### Confusion Matrix\n" + str(confusion_matrix(y_test_str, predictions_str))
+            report_text += "\n\n### Classification Report\n" + classification_report(y_test_str, predictions_str, zero_division=0)
+
             col1, col2 = st.columns([1, 2])
             with col1:
-                report_lines = []
-                report_lines.append("# Machine Learning Model Evaluation Report")
-                report_lines.append(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-                report_lines.append(f"Problem Type: Classification")
-                report_lines.append(f"Target Column: {st.session_state.target_column}")
-                report_lines.append("")
-                report_lines.append("## Performance Summary")
-                report_lines.append(f"- Accuracy: {acc:.4f}")
-                report_lines.append(f"- Weighted Precision: {prec:.4f}")
-                report_lines.append(f"- Weighted Recall: {rec:.4f}")
-                report_lines.append(f"- Weighted F1: {f1:.4f}")
-                report_lines.append("")
-                report_lines.append("### Confusion Matrix")
-                cm_str = np.array2string(confusion_matrix(y_test_str, predictions_str))
-                report_lines.append(cm_str)
-                report_lines.append("")
-                report_lines.append("### Classification Report")
-                report_lines.append(classification_report(y_test_str, predictions_str, zero_division=0))
-                report_lines.append("")
-                report_lines.append("## Best Model")
-                report_lines.append(str(model))
-                pdf_bytes = text_to_simple_pdf_bytes("\n".join(report_lines), title="ML Evaluation Report")
+                pdf_bytes = text_to_simple_pdf_bytes(report_text, title="ML Evaluation Report")
                 st.download_button(
                     label="📥 Download Full Evaluation Report (PDF)",
                     data=pdf_bytes,
@@ -1169,31 +1190,16 @@ def evaluation_page():
                     key="cls_pdf"
                 )
             with col2:
-                report_md = "\n".join([
-                    "# Machine Learning Model Evaluation Report",
-                    f"**Generated:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-                    f"**Problem Type:** Classification",
-                    f"**Target Column:** {st.session_state.target_column}",
-                    "",
-                    "## Performance Summary",
-                    f"- Accuracy: {acc:.4f}",
-                    f"- Weighted Precision: {prec:.4f}",
-                    f"- Weighted Recall: {rec:.4f}",
-                    f"- Weighted F1: {f1:.4f}",
-                    "",
-                    "## Best Model",
-                    f"```\n{model}\n```"
-                ])
                 st.download_button(
                     label="📥 Download Report (Markdown)",
-                    data=report_md,
+                    data=report_text,
                     file_name="ml_evaluation_report.md",
                     mime="text/markdown",
                     use_container_width=True,
                     key="cls_md"
                 )
 
-        else:
+        else:  # Regression
             y_test = y_test.astype(float)
             predictions = predictions.astype(float)
 
@@ -1262,23 +1268,12 @@ def evaluation_page():
                 st.error(f"Failed to generate residual plot: {e}")
 
             st.markdown("---")
+            metrics = {"MAE": mae, "MSE": mse, "RMSE": rmse, "R²": r2}
+            report_text = generate_report_text("Regression", metrics, model, st.session_state.target_column)
+
             col1, col2 = st.columns([1, 2])
             with col1:
-                report_lines = []
-                report_lines.append("# Machine Learning Model Evaluation Report")
-                report_lines.append(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-                report_lines.append(f"Problem Type: Regression")
-                report_lines.append(f"Target Column: {st.session_state.target_column}")
-                report_lines.append("")
-                report_lines.append("## Performance Summary")
-                report_lines.append(f"- MAE: {mae:.4f}")
-                report_lines.append(f"- MSE: {mse:.4f}")
-                report_lines.append(f"- RMSE: {rmse:.4f}")
-                report_lines.append(f"- R²: {r2:.4f}")
-                report_lines.append("")
-                report_lines.append("## Best Model")
-                report_lines.append(str(model))
-                pdf_bytes = text_to_simple_pdf_bytes("\n".join(report_lines), title="ML Evaluation Report")
+                pdf_bytes = text_to_simple_pdf_bytes(report_text, title="ML Evaluation Report")
                 st.download_button(
                     label="📥 Download Full Evaluation Report (PDF)",
                     data=pdf_bytes,
@@ -1288,24 +1283,9 @@ def evaluation_page():
                     key="reg_pdf"
                 )
             with col2:
-                report_md = "\n".join([
-                    "# Machine Learning Model Evaluation Report",
-                    f"**Generated:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-                    f"**Problem Type:** Regression",
-                    f"**Target Column:** {st.session_state.target_column}",
-                    "",
-                    "## Performance Summary",
-                    f"- MAE: {mae:.4f}",
-                    f"- MSE: {mse:.4f}",
-                    f"- RMSE: {rmse:.4f}",
-                    f"- R²: {r2:.4f}",
-                    "",
-                    "## Best Model",
-                    f"```\n{model}\n```"
-                ])
                 st.download_button(
                     label="📥 Download Report (Markdown)",
-                    data=report_md,
+                    data=report_text,
                     file_name="ml_evaluation_report.md",
                     mime="text/markdown",
                     use_container_width=True,
@@ -1321,6 +1301,15 @@ def evaluation_page():
                     imp_df = pd.DataFrame({'feature': feature_names, 'importance': model.feature_importances_})
                     imp_df = imp_df.sort_values('importance', ascending=False).head(20)
                     fig_imp = px.bar(imp_df, x='importance', y='feature', orientation='h', title='Feature Importance')
+                    st.plotly_chart(fig_imp, use_container_width=True)
+                elif hasattr(model, 'coef_'):
+                    coef = model.coef_
+                    if coef.ndim == 2:
+                        imp_df = pd.DataFrame({'feature': feature_names, 'importance': np.abs(coef).mean(axis=0)})
+                    else:
+                        imp_df = pd.DataFrame({'feature': feature_names, 'coefficient': coef})
+                    imp_df = imp_df.sort_values('importance', ascending=False).head(20)
+                    fig_imp = px.bar(imp_df, x='importance', y='feature', orientation='h', title='Feature Coefficients')
                     st.plotly_chart(fig_imp, use_container_width=True)
             except Exception as e:
                 st.warning(f"无法绘制特征重要性图：{e}")
@@ -1353,6 +1342,16 @@ def export_page():
         st.markdown("#### 📊 Model Information")
         if st.button("Show Model Details"):
             st.write("**Best Model:**", st.session_state.model)
+        # Download model
+        if st.button("💾 Download Model (pickle)"):
+            model_bytes = pickle.dumps(st.session_state.model)
+            st.download_button(
+                label="Click to download model",
+                data=model_bytes,
+                file_name="ml_model.pkl",
+                mime="application/octet-stream",
+                key="model_download"
+            )
     with col2:
         st.markdown("#### 📊 Model Report")
         if st.button("Generate Model Report"):
@@ -1418,6 +1417,7 @@ This model was generated using PyCaret AutoML through the No-Code ML Platform.
         for key in keys:
             if key in st.session_state:
                 st.session_state[key] = None
+        st.session_state.app_page = "📁 Data Upload"
         st.rerun()
 
     st.markdown("---")
