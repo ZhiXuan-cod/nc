@@ -175,6 +175,7 @@ def hash_password(password: str, iterations: int = 100_000) -> str:
 def verify_password(plain_password: str, stored_password: str) -> bool:
     if not stored_password:
         return False
+
     if stored_password.startswith("pbkdf2_sha256$"):
         try:
             _, iterations_str, salt_b64, hash_b64 = stored_password.split("$", 3)
@@ -190,6 +191,8 @@ def verify_password(plain_password: str, stored_password: str) -> bool:
             return candidate_hash == expected_hash
         except Exception:
             return False
+
+    # Legacy plain-text fallback
     return stored_password == plain_password
 
 # ---------- User data storage (Supabase) ----------
