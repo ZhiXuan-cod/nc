@@ -30,7 +30,7 @@ try:
     PYCARET_AVAILABLE = True
 except ImportError:
     PYCARET_AVAILABLE = False
-    st.warning("⚠️ PyCaret not installed. Install with 'pip install pycaret[full]' to use AutoML.")
+    st.warning("⚠️ PyCaret not installed. Install with 'pip install pycaret' to use AutoML.")
 
 # ---------- Optional SHAP for deeper explanations ----------
 try:
@@ -44,10 +44,6 @@ def _pdf_escape(text: str) -> str:
     return text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
 
 def text_to_simple_pdf_bytes(text: str, title: str = "ML Model Report") -> bytes:
-    """
-    Create a simple multi-page PDF containing the given plain text.
-    No third-party dependencies (works on Streamlit free tier).
-    """
     page_w, page_h = 612, 792  # US Letter points
     margin_x, margin_y = 54, 54
     font_size = 10
@@ -61,12 +57,9 @@ def text_to_simple_pdf_bytes(text: str, title: str = "ML Model Report") -> bytes
 
     def add_obj(obj: bytes) -> int:
         objects.append(obj)
-        return len(objects)  # 1-based object number
+        return len(objects)
 
-    # 1) Catalog (points to Pages obj #2)
     catalog_obj_num = add_obj(b"<< /Type /Catalog /Pages 2 0 R >>")
-
-    # Reserve slot for Pages object (#2); fill later
     add_obj(b"<< /Type /Pages /Kids [] /Count 0 >>")
 
     page_obj_nums: List[int] = []
@@ -141,7 +134,7 @@ if "supabase" not in st.session_state:
         st.error(f"Supabase connection failed: {e}")
         st.session_state.supabase = None
 
-# ---------- Background image helper (now supports both .jpg and .png) ----------
+# ---------- Background image helper ----------
 def get_base64_of_file(file_path):
     try:
         with open(file_path, "rb") as f:
@@ -151,7 +144,6 @@ def get_base64_of_file(file_path):
         return None
 
 def set_bg_image_local(image_base_name):
-    # Try .jpg first, then .png
     for ext in ['.jpg', '.png']:
         full_path = image_base_name + ext
         bin_str = get_base64_of_file(full_path)
@@ -168,7 +160,6 @@ def set_bg_image_local(image_base_name):
             """
             st.markdown(page_bg_img, unsafe_allow_html=True)
             return
-    # Fallback gradient if no image found
     fallback_bg = """
     <style>
     .stApp {
@@ -191,7 +182,6 @@ def hash_password(password: str, iterations: int = 100_000) -> str:
 def verify_password(plain_password: str, stored_password: str) -> bool:
     if not stored_password:
         return False
-
     if stored_password.startswith("pbkdf2_sha256$"):
         try:
             _, iterations_str, salt_b64, hash_b64 = stored_password.split("$", 3)
@@ -207,8 +197,6 @@ def verify_password(plain_password: str, stored_password: str) -> bool:
             return candidate_hash == expected_hash
         except Exception:
             return False
-
-    # Legacy plain-text fallback
     return stored_password == plain_password
 
 # ---------- User data storage (Supabase) ----------
@@ -555,7 +543,7 @@ def upload_page():
                 st.rerun()
 
     st.markdown("---")
-    col1, col2, col3 = st.columns([1, 2, 1])
+    _, col2, _ = st.columns([1, 2, 1])
     with col2:
         if st.session_state.data is not None and st.session_state.target_column is not None:
             if st.button("➡️ Go to Data Cleaning", type="primary", use_container_width=True):
@@ -689,7 +677,7 @@ def cleaning_page():
             st.session_state.cleaned_data = cleaned
 
     st.markdown("---")
-    col1, col2, col3 = st.columns([1, 2, 1])
+    _, col2, _ = st.columns([1, 2, 1])
     with col2:
         if st.session_state.cleaned_data is not None:
             if st.button("✅ Apply Cleaning and Continue", type="primary", use_container_width=True):
@@ -807,7 +795,7 @@ def eda_page():
                 st.plotly_chart(fig, use_container_width=True)
 
     st.markdown("---")
-    col1, col2, col3 = st.columns([1, 2, 1])
+    _, col2, _ = st.columns([1, 2, 1])
     with col2:
         if st.session_state.target_column is not None:
             if st.button("➡️ Go to Model Training", type="primary", use_container_width=True):
@@ -816,19 +804,16 @@ def eda_page():
         else:
             st.button("➡️ Go to Model Training (set target first)", disabled=True, use_container_width=True)
 
-# ---------- Training page (PyCaret version) ----------
 def training_page():
     st.markdown('<h2 class="sub-header">📐 Automated Model Training with PyCaret</h2>', unsafe_allow_html=True)
 
-    # Check PyCaret availability
     if not PYCARET_AVAILABLE:
-        st.error("⚠️ PyCaret is not installed. Please install it with `pip install pycaret[full]` to use AutoML.")
+        st.error("⚠️ PyCaret is not installed. Please install it with `pip install pycaret` to use AutoML.")
         if st.button("Go to Data Upload"):
             st.session_state.app_page = "📁 Data Upload"
             st.rerun()
         return
 
-    # Check prerequisites
     if st.session_state.data is None or st.session_state.target_column is None:
         st.warning("⚠️ Please upload data and set target column first.")
         if st.button("Go to Data Upload"):
@@ -851,7 +836,6 @@ def training_page():
     </div>
     """, unsafe_allow_html=True)
 
-    # Training options
     if "train_time" not in st.session_state:
         st.session_state.train_time = 10
     if "training_mode" not in st.session_state:
@@ -868,23 +852,21 @@ def training_page():
     if mode != st.session_state.training_mode:
         st.session_state.training_mode = mode
 
-    # Define model lists based on mode and problem type
     if problem_type == "Classification":
         if mode == "Fast":
-            allowed_models = ['lr', 'ridge', 'dt']  # LogisticRegression, RidgeClassifier, DecisionTree
+            allowed_models = ['lr', 'ridge', 'dt']
         elif mode == "Balanced":
-            allowed_models = ['lr', 'ridge', 'dt', 'rf', 'nb']  # add RandomForest, NaiveBayes
-        else:  # Accurate
+            allowed_models = ['lr', 'ridge', 'dt', 'rf', 'nb']
+        else:
             allowed_models = ['lr', 'ridge', 'dt', 'rf', 'nb', 'svm', 'xgboost']
-    else:  # Regression
+    else:
         if mode == "Fast":
-            allowed_models = ['lr', 'ridge', 'dt']  # Linear, Ridge, DecisionTree
+            allowed_models = ['lr', 'ridge', 'dt']
         elif mode == "Balanced":
-            allowed_models = ['lr', 'ridge', 'dt', 'rf', 'lar']  # Lasso, ElasticNet
+            allowed_models = ['lr', 'ridge', 'dt', 'rf', 'lar']
         else:
             allowed_models = ['lr', 'ridge', 'dt', 'rf', 'lar', 'svm', 'xgboost']
 
-    # User controls
     col1, col2, col3 = st.columns(3)
     with col1:
         test_size = st.slider("Test Size (%)", 10, 40, 20) / 100
@@ -893,7 +875,6 @@ def training_page():
     with col3:
         random_state = st.number_input("Random State", 0, 100, 42)
 
-    # Optional: Sample data for faster training (helpful on free tier)
     sample_frac = st.slider("Sample fraction (optional, for speed)", 0.1, 1.0, 1.0, 0.05)
     if sample_frac < 1.0:
         df = df.sample(frac=sample_frac, random_state=random_state)
@@ -902,38 +883,27 @@ def training_page():
     if st.button("🚀 Start Automated Training", type="primary", use_container_width=True):
         with st.spinner(f"🧠 PyCaret is training {len(allowed_models)} models with {fold}-fold CV. This may take a few minutes..."):
             try:
-                # Setup PyCaret environment
                 if problem_type == "Classification":
-                    # Classification setup
                     clf_setup(
                         data=df,
                         target=target_col,
                         train_size=1 - test_size,
                         session_id=random_state,
                         fold=fold,
-                        n_jobs=1,          # single thread to save memory
+                        n_jobs=1,
                         html=False,
                         verbose=False,
                         ignore_low_variance=False,
-                        remove_multicollinearity=False,  # keep simple
+                        remove_multicollinearity=False,
                         log_experiment=False
                     )
-                    # Compare models and pick best
                     best_model = clf_compare(
                         include=allowed_models,
                         n_select=1,
                         verbose=False,
-                        sort='Accuracy' if problem_type == "Classification" else 'R2'
+                        sort='Accuracy'
                     )
-                    # Get predictions on test set
-                    predictions_df = clf_predict(best_model, data=df)  # this includes original data + predictions
-                    # Extract test set from PyCaret's environment
-                    X_test = get_config('X_test')
-                    y_test = get_config('y_test')
-                    # Predictions on test set
-                    test_predictions = clf_predict(best_model, data=X_test)['prediction_label']
                 else:
-                    # Regression setup
                     reg_setup(
                         data=df,
                         target=target_col,
@@ -953,23 +923,25 @@ def training_page():
                         verbose=False,
                         sort='R2'
                     )
-                    # Get predictions
-                    predictions_df = reg_predict(best_model, data=df)
+
+                try:
                     X_test = get_config('X_test')
                     y_test = get_config('y_test')
-                    test_predictions = reg_predict(best_model, data=X_test)['prediction_label']
+                except Exception as e:
+                    st.error(f"Failed to retrieve test data: {e}")
+                    return
 
-                # Retrieve test predictions and true values
-                # Ensure we have the test data for evaluation later
+                if problem_type == "Classification":
+                    pred_df = clf_predict(best_model, data=X_test)
+                else:
+                    pred_df = reg_predict(best_model, data=X_test)
+                test_predictions = pred_df.iloc[:, -1]
+
                 st.session_state.test_data = {'X_test': X_test, 'y_test': y_test}
                 st.session_state.predictions = test_predictions.values
                 st.session_state.model = best_model
                 st.session_state.training_complete = True
 
-                # Get model comparison results
-                comparison_df = pull()  # the comparison dataframe from PyCaret
-
-                # Display success
                 with st.expander("📊 Training Results (click to expand)", expanded=True):
                     st.markdown("#### 🏆 Best Model")
                     st.code(str(best_model), language='python')
@@ -978,8 +950,10 @@ def training_page():
                         imp_df = pd.DataFrame({'feature': X_test.columns, 'importance': best_model.feature_importances_})
                         imp_df = imp_df.sort_values('importance', ascending=False).head(10)
                         st.dataframe(imp_df, use_container_width=True)
-                    st.markdown("#### 📊 Model Comparison (top 10)")
-                    st.dataframe(comparison_df.head(10), use_container_width=True)
+                    comparison_df = pull()
+                    if comparison_df is not None:
+                        st.markdown("#### 📊 Model Comparison (top 10)")
+                        st.dataframe(comparison_df.head(10), use_container_width=True)
 
                 st.success("🎉 Model training completed successfully!")
                 st.session_state.app_page = "📈 Model Evaluation"
@@ -989,7 +963,6 @@ def training_page():
                 st.error(f"❌ Training failed: {type(e).__name__}: {str(e)}")
                 print(f"Training error: {type(e).__name__}: {e}")
 
-# ---------- Evaluation page (adapted for PyCaret) ----------
 def evaluation_page():
     st.markdown('<h2 class="sub-header">📈 Model Performance Evaluation</h2>', unsafe_allow_html=True)
 
@@ -1010,7 +983,7 @@ def evaluation_page():
     model = st.session_state.model
     predictions = st.session_state.predictions
     test_data = st.session_state.test_data
-    y_test = test_data['y_test']  # Original labels (for classification: strings; for regression: floats)
+    y_test = test_data['y_test']
     problem_type = st.session_state.problem_type
     X_test = test_data['X_test']
     if isinstance(X_test, pd.DataFrame):
@@ -1018,31 +991,31 @@ def evaluation_page():
     else:
         feature_names = [f"Feature_{i}" for i in range(X_test.shape[1])]
 
-    # Ensure consistent types
     try:
         y_test = np.asarray(y_test).ravel()
         predictions = np.asarray(predictions).ravel()
 
-        # --- Model Comparison (from PyCaret) ---
-        # Since we stored the comparison in pull() during training, we can re-fetch it if needed
-        # However pull() is only available during training. We'll just show the best model info.
         with st.expander("🔍 Model Information", expanded=False):
             st.markdown("#### Best Model")
             st.code(str(model), language='python')
-            if hasattr(model, 'feature_importances_'):
-                st.markdown("#### Feature Importance (all)")
-                imp_df = pd.DataFrame({'feature': feature_names, 'importance': model.feature_importances_})
-                imp_df = imp_df.sort_values('importance', ascending=False)
-                st.dataframe(imp_df, use_container_width=True)
-            elif hasattr(model, 'coef_'):
-                coef = model.coef_.ravel()
-                imp_df = pd.DataFrame({'feature': feature_names, 'coefficient': coef})
-                imp_df = imp_df.sort_values('coefficient', ascending=False)
-                st.dataframe(imp_df, use_container_width=True)
+            try:
+                if hasattr(model, 'feature_importances_'):
+                    st.markdown("#### Feature Importance (all)")
+                    imp_df = pd.DataFrame({'feature': feature_names, 'importance': model.feature_importances_})
+                    imp_df = imp_df.sort_values('importance', ascending=False)
+                    st.dataframe(imp_df, use_container_width=True)
+                elif hasattr(model, 'coef_'):
+                    st.markdown("#### Coefficients (Top 20)")
+                    coef = model.coef_.ravel()
+                    imp_df = pd.DataFrame({'feature': feature_names, 'coefficient': coef})
+                    imp_df = imp_df.sort_values('coefficient', ascending=False)
+                    st.dataframe(imp_df, use_container_width=True)
+                else:
+                    st.info("当前模型不支持特征重要性或系数展示。")
+            except Exception as e:
+                st.warning(f"特征重要性展示失败：{e}")
 
-        # --- Classification evaluation ---
         if problem_type == "Classification":
-            # Ensure string labels
             y_test_str = y_test.astype(str)
             predictions_str = predictions.astype(str)
 
@@ -1056,7 +1029,6 @@ def evaluation_page():
                 st.error("No valid samples available for evaluation.")
                 return
 
-            # Standard metrics
             acc = accuracy_score(y_test_str, predictions_str)
             prec = precision_score(y_test_str, predictions_str, average='weighted', zero_division=0)
             rec = recall_score(y_test_str, predictions_str, average='weighted', zero_division=0)
@@ -1068,7 +1040,6 @@ def evaluation_page():
             col3.metric("Recall", f"{rec:.4f}")
             col4.metric("F1-Score", f"{f1:.4f}")
 
-            # --- Natural language explanations ---
             st.markdown("### 📖 Interpretation")
             if acc > 0.9:
                 st.success("✅ **Excellent accuracy** – the model correctly classifies >90% of cases.")
@@ -1084,7 +1055,6 @@ def evaluation_page():
             elif rec < 0.5:
                 st.warning("⚠️ **Low recall** – many false negatives; the model misses a significant number of positive instances.")
 
-            # --- Confusion matrix ---
             st.markdown("### 🎯 Confusion Matrix")
             try:
                 cm = confusion_matrix(y_test_str, predictions_str)
@@ -1095,7 +1065,7 @@ def evaluation_page():
                 fig.update_layout(xaxis_title="Predicted", yaxis_title="Actual")
                 st.plotly_chart(fig, use_container_width=True)
 
-                if len(labels) == 2:  # Binary classification
+                if len(labels) == 2:
                     tn, fp, fn, tp = cm.ravel()
                     st.markdown(f"""
                     - **True Negatives (TN):** {tn} – correctly predicted negative class.
@@ -1108,10 +1078,8 @@ def evaluation_page():
             except Exception as e:
                 st.error(f"Failed to generate confusion matrix: {e}")
 
-            # --- ROC & PR curves (binary) ---
             if hasattr(model, 'predict_proba') and len(np.unique(y_test_str)) == 2:
                 try:
-                    # For binary, we need numeric labels
                     le = LabelEncoder()
                     y_test_num = le.fit_transform(y_test_str)
                     y_proba = model.predict_proba(X_test)[:, 1]
@@ -1134,14 +1102,12 @@ def evaluation_page():
                 except Exception as e:
                     st.info(f"Could not compute ROC/PR curves: {e}")
 
-            # --- Threshold tuning (binary) ---
             if hasattr(model, 'predict_proba') and len(np.unique(y_test_str)) == 2:
                 st.markdown("### ⚙️ Decision Threshold Tuning & Cost Simulation")
                 st.write("Adjust the classification threshold to optimize for your business needs.")
                 y_proba = model.predict_proba(X_test)[:, 1]
                 threshold = st.slider("Threshold", 0.0, 1.0, 0.5, 0.01)
                 y_pred_adj = (y_proba >= threshold).astype(int)
-                # Decode back to original labels
                 le = LabelEncoder()
                 le.fit(y_test_str)
                 y_pred_adj_labels = le.inverse_transform(y_pred_adj)
@@ -1161,9 +1127,6 @@ def evaluation_page():
                 adj_rec = recall_score(y_test_str, y_pred_adj_labels, average='binary', pos_label=le.classes_[1])
                 st.write(f"At threshold {threshold:.2f}: Accuracy={adj_acc:.4f}, Precision={adj_prec:.4f}, Recall={adj_rec:.4f}")
 
-            # --- Feature importance (already displayed above) ---
-
-            # --- Detailed classification report ---
             st.markdown("### 📝 Detailed Classification Report")
             try:
                 report = classification_report(y_test_str, predictions_str, output_dict=True, zero_division=0)
@@ -1172,7 +1135,6 @@ def evaluation_page():
             except Exception as e:
                 st.error(f"Failed to generate classification report: {e}")
 
-            # --- Export buttons for Classification ---
             st.markdown("---")
             col1, col2 = st.columns([1, 2])
             with col1:
@@ -1231,7 +1193,6 @@ def evaluation_page():
                     key="cls_md"
                 )
 
-        # --- Regression evaluation ---
         else:
             y_test = y_test.astype(float)
             predictions = predictions.astype(float)
@@ -1257,7 +1218,6 @@ def evaluation_page():
             col3.metric("RMSE", f"{rmse:.4f}")
             col4.metric("R² Score", f"{r2:.4f}")
 
-            # --- Interpretation ---
             st.markdown("### 📖 Interpretation")
             if r2 > 0.8:
                 st.success("✅ **Excellent R²** – the model explains >80% of the variance.")
@@ -1269,7 +1229,6 @@ def evaluation_page():
             st.markdown(f"**Mean Absolute Error (MAE):** On average, predictions are off by {mae:.2f} units.")
             st.markdown(f"**Root Mean Squared Error (RMSE):** Heavily penalizes large errors; current value: {rmse:.2f}.")
 
-            # --- Actual vs Predicted scatter plot ---
             st.markdown("### 📈 Actual vs Predicted")
             try:
                 fig = px.scatter(x=y_test, y=predictions, labels={'x': 'Actual', 'y': 'Predicted'},
@@ -1283,7 +1242,6 @@ def evaluation_page():
             except Exception as e:
                 st.error(f"Failed to generate actual vs predicted plot: {e}")
 
-            # --- Residual plot ---
             st.markdown("### 📉 Residual Plot")
             try:
                 residuals = y_test - predictions
@@ -1303,9 +1261,6 @@ def evaluation_page():
             except Exception as e:
                 st.error(f"Failed to generate residual plot: {e}")
 
-            # --- Feature importance (already displayed above) ---
-
-            # --- Export buttons for Regression ---
             st.markdown("---")
             col1, col2 = st.columns([1, 2])
             with col1:
@@ -1357,20 +1312,21 @@ def evaluation_page():
                     key="reg_md"
                 )
 
-        # --- Best model details ---
         st.markdown("### 🏆 Best Model Found by PyCaret")
         if model is not None:
             st.code(str(model), language='python')
-            if hasattr(model, 'feature_importances_'):
-                st.markdown("#### Feature Importance (Top 20)")
-                imp_df = pd.DataFrame({'feature': feature_names, 'importance': model.feature_importances_})
-                imp_df = imp_df.sort_values('importance', ascending=False).head(20)
-                fig_imp = px.bar(imp_df, x='importance', y='feature', orientation='h', title='Feature Importance')
-                st.plotly_chart(fig_imp, use_container_width=True)
+            try:
+                if hasattr(model, 'feature_importances_'):
+                    st.markdown("#### Feature Importance (Top 20)")
+                    imp_df = pd.DataFrame({'feature': feature_names, 'importance': model.feature_importances_})
+                    imp_df = imp_df.sort_values('importance', ascending=False).head(20)
+                    fig_imp = px.bar(imp_df, x='importance', y='feature', orientation='h', title='Feature Importance')
+                    st.plotly_chart(fig_imp, use_container_width=True)
+            except Exception as e:
+                st.warning(f"无法绘制特征重要性图：{e}")
 
-        # Navigation
         st.markdown("---")
-        col1, col2, col3 = st.columns([1, 2, 1])
+        _, col2, _ = st.columns([1, 2, 1])
         with col2:
             if st.session_state.training_complete:
                 if st.button("➡️ Go to Export Results", type="primary", use_container_width=True):
@@ -1383,7 +1339,6 @@ def evaluation_page():
         st.error(f"Unknown error occurred during evaluation: {str(e)}")
         st.info("Please try retraining the model or check the data format.")
 
-# ---------- Export page (unchanged) ----------
 def export_page():
     st.markdown('<h2 class="sub-header">💾 Export Model and Results</h2>', unsafe_allow_html=True)
     if not st.session_state.training_complete:
@@ -1398,7 +1353,6 @@ def export_page():
         st.markdown("#### 📊 Model Information")
         if st.button("Show Model Details"):
             st.write("**Best Model:**", st.session_state.model)
-            # PyCaret model does not have best_config attribute, so skip
     with col2:
         st.markdown("#### 📊 Model Report")
         if st.button("Generate Model Report"):
@@ -1467,7 +1421,7 @@ This model was generated using PyCaret AutoML through the No-Code ML Platform.
         st.rerun()
 
     st.markdown("---")
-    col1, col2, col3 = st.columns([1, 2, 1])
+    _, col2, _ = st.columns([1, 2, 1])
     with col2:
         if st.button("🔄 Start Over (Back to Data Upload)", type="secondary", use_container_width=True):
             st.session_state.app_page = "📁 Data Upload"
@@ -1475,7 +1429,7 @@ This model was generated using PyCaret AutoML through the No-Code ML Platform.
 
 # ---------- Dashboard ----------
 def dashboard_page():
-    set_bg_image_local("purple")   # Now supports both .jpg and .png
+    set_bg_image_local("purple")
 
     st.markdown("""
     <style>
@@ -1502,12 +1456,11 @@ def dashboard_page():
             "📈 Model Evaluation",
             "💾 Export Results"
         ]
-        # Safe index selection
         if st.session_state.app_page in app_page_options:
             default_index = app_page_options.index(st.session_state.app_page)
         else:
             default_index = 0
-            st.session_state.app_page = app_page_options[0]  # sync with valid value
+            st.session_state.app_page = app_page_options[0]
 
         selected = st.radio("Select a step:", app_page_options, index=default_index)
         st.session_state.app_page = selected
@@ -1524,8 +1477,8 @@ def dashboard_page():
         - Export model report
         """)
         if not PYCARET_AVAILABLE:
-            st.error("⚠️ PyCaret not installed. Install with: `pip install pycaret[full]`")
-            st.code("pip install pycaret[full]", language="bash")
+            st.error("⚠️ PyCaret not installed. Install with: `pip install pycaret`")
+            st.code("pip install pycaret", language="bash")
 
         if st.button("👋🏻 Logout", type="primary"):
             st.session_state.logged_in = False
@@ -1538,7 +1491,6 @@ def dashboard_page():
             go_to("front")
             st.rerun()
 
-    # Main content area
     if st.session_state.app_page == "📁 Data Upload":
         upload_page()
     elif st.session_state.app_page == "🧹 Data Cleaning":
