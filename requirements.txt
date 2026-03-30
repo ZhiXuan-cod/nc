@@ -9,4 +9,3 @@ supabase
 pycaret
 psutil
 scipy
-shap
