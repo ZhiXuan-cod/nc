@@ -23,6 +23,15 @@ warnings.filterwarnings('ignore')
 
 from supabase import create_client
 
+# ---------- PyCaret imports ----------
+try:
+    from pycaret.classification import setup as clf_setup, compare_models as clf_compare, predict_model as clf_predict, get_config, pull, save_model
+    from pycaret.regression import setup as reg_setup, compare_models as reg_compare, predict_model as reg_predict
+    PYCARET_AVAILABLE = True
+except ImportError:
+    PYCARET_AVAILABLE = False
+    st.warning("⚠️ PyCaret not installed. Install with 'pip install pycaret[full]' to use AutoML.")
+
 # ---------- Optional SHAP for deeper explanations ----------
 try:
     import shap
@@ -113,36 +122,6 @@ def text_to_simple_pdf_bytes(text: str, title: str = "ML Model Report") -> bytes
     )
 
     return header + body + xref_bytes + trailer
-
-# ---------- FLAML import with fallback ----------
-try:
-    from flaml import AutoML
-    flaml_available = True
-except ImportError:
-    flaml_available = False
-    st.warning("⚠️ FLAML not installed. Install with 'pip install flaml[automl]' to use auto‑ML.")
-    # Dummy class to avoid NameError
-    class AutoML:
-        def __init__(self, **kwargs):
-            pass
-        def fit(self, X, y, **kwargs):
-            raise ImportError("FLAML is not installed.")
-        def predict(self, X):
-            return None
-        def score(self, X, y):
-            return 0.0
-        @property
-        def model(self):
-            return "No model (FLAML missing)"
-        @property
-        def best_config(self):
-            return {}
-        @property
-        def best_config_per_estimator(self):
-            return {}
-        @property
-        def model_history(self):
-            return []
 
 # ---------- Page configuration ----------
 st.set_page_config(
@@ -837,65 +816,180 @@ def eda_page():
         else:
             st.button("➡️ Go to Model Training (set target first)", disabled=True, use_container_width=True)
 
-# ---------- Helper function to extract model comparison from FLAML ----------
-def get_model_comparison(automl):
-    """Attempt to extract a DataFrame of all models tried by FLAML with their scores."""
-    try:
-        # FLAML stores best_config_per_estimator and model_history
-        if hasattr(automl, 'best_config_per_estimator') and automl.best_config_per_estimator:
-            rows = []
-            for estimator, config in automl.best_config_per_estimator.items():
-                # Try to get validation score from config or from history
-                # The score might be stored in automl.model_history
-                score = None
-                if hasattr(automl, 'model_history'):
-                    # Search for the estimator's best score in history
-                    for hist in automl.model_history:
-                        if hist.get('estimator') == estimator and 'val_loss' in hist:
-                            score = hist['val_loss']
-                            break
-                rows.append({
-                    'Estimator': estimator,
-                    'Best Hyperparameters': config,
-                    'Validation Score': score
-                })
-            if rows:
-                return pd.DataFrame(rows)
-    except Exception as e:
-        st.warning(f"Could not retrieve model comparison: {e}")
-    return None
+# ---------- Training page (PyCaret version) ----------
+def training_page():
+    st.markdown('<h2 class="sub-header">📐 Automated Model Training with PyCaret</h2>', unsafe_allow_html=True)
 
-# ---------- Feature importance (if model supports) ----------
-def plot_feature_importance(model, feature_names, problem_type):
-    """Plot feature importance if model supports it."""
-    try:
-        # For tree-based models from FLAML (like lgbm, xgboost, rf)
-        if hasattr(model, 'feature_importances_'):
-            importances = model.feature_importances_
-            if len(importances) == len(feature_names):
-                df = pd.DataFrame({'feature': feature_names, 'importance': importances})
-                df = df.sort_values('importance', ascending=False).head(20)
-                fig = px.bar(df, x='importance', y='feature', orientation='h',
-                                title='Feature Importance (Top 20)')
-                st.plotly_chart(fig, use_container_width=True)
-                return True
-        # For linear models, coefficients
-        elif hasattr(model, 'coef_'):
-            coef = model.coef_.ravel()
-            if len(coef) == len(feature_names):
-                df = pd.DataFrame({'feature': feature_names, 'coefficient': coef})
-                df = df.sort_values('coefficient', ascending=False).head(20)
-                fig = px.bar(df, x='coefficient', y='feature', orientation='h',
-                                title='Coefficient Magnitude (Top 20)')
-                st.plotly_chart(fig, use_container_width=True)
-                return True
+    # Check PyCaret availability
+    if not PYCARET_AVAILABLE:
+        st.error("⚠️ PyCaret is not installed. Please install it with `pip install pycaret[full]` to use AutoML.")
+        if st.button("Go to Data Upload"):
+            st.session_state.app_page = "📁 Data Upload"
+            st.rerun()
+        return
+
+    # Check prerequisites
+    if st.session_state.data is None or st.session_state.target_column is None:
+        st.warning("⚠️ Please upload data and set target column first.")
+        if st.button("Go to Data Upload"):
+            st.session_state.app_page = "📁 Data Upload"
+            st.rerun()
+        return
+
+    df = st.session_state.data.copy()
+    target_col = st.session_state.target_column
+    problem_type = st.session_state.problem_type
+
+    st.markdown(f"""
+    <div class="card">
+    <h4>Training Configuration</h4>
+    <ul>
+        <li><strong>Problem Type:</strong> {problem_type}</li>
+        <li><strong>Target Column:</strong> {target_col}</li>
+        <li><strong>Dataset Shape:</strong> {df.shape}</li>
+    </ul>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # Training options
+    if "train_time" not in st.session_state:
+        st.session_state.train_time = 10
+    if "training_mode" not in st.session_state:
+        st.session_state.training_mode = "Balanced"
+
+    col_mode, _ = st.columns([1, 2])
+    with col_mode:
+        mode = st.selectbox(
+            "Training Mode Preset",
+            ["Fast", "Balanced", "Accurate"],
+            index=["Fast", "Balanced", "Accurate"].index(st.session_state.training_mode),
+            help="Fast: lightweight models only; Balanced: mix of models; Accurate: more models & deeper tuning"
+        )
+    if mode != st.session_state.training_mode:
+        st.session_state.training_mode = mode
+
+    # Define model lists based on mode and problem type
+    if problem_type == "Classification":
+        if mode == "Fast":
+            allowed_models = ['lr', 'ridge', 'dt']  # LogisticRegression, RidgeClassifier, DecisionTree
+        elif mode == "Balanced":
+            allowed_models = ['lr', 'ridge', 'dt', 'rf', 'nb']  # add RandomForest, NaiveBayes
+        else:  # Accurate
+            allowed_models = ['lr', 'ridge', 'dt', 'rf', 'nb', 'svm', 'xgboost']
+    else:  # Regression
+        if mode == "Fast":
+            allowed_models = ['lr', 'ridge', 'dt']  # Linear, Ridge, DecisionTree
+        elif mode == "Balanced":
+            allowed_models = ['lr', 'ridge', 'dt', 'rf', 'lar']  # Lasso, ElasticNet
         else:
-            st.info("Feature importance not available for this model type.")
-    except Exception as e:
-        st.info(f"Could not plot feature importance: {e}")
-    return False
+            allowed_models = ['lr', 'ridge', 'dt', 'rf', 'lar', 'svm', 'xgboost']
 
-# ---------- Enhanced evaluation page with interpretability (fixed export) ----------
+    # User controls
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        test_size = st.slider("Test Size (%)", 10, 40, 20) / 100
+    with col2:
+        fold = st.slider("Cross-validation folds", 3, 10, 5)
+    with col3:
+        random_state = st.number_input("Random State", 0, 100, 42)
+
+    # Optional: Sample data for faster training (helpful on free tier)
+    sample_frac = st.slider("Sample fraction (optional, for speed)", 0.1, 1.0, 1.0, 0.05)
+    if sample_frac < 1.0:
+        df = df.sample(frac=sample_frac, random_state=random_state)
+        st.info(f"Using {len(df)} rows after sampling (original: {st.session_state.data.shape[0]}).")
+
+    if st.button("🚀 Start Automated Training", type="primary", use_container_width=True):
+        with st.spinner(f"🧠 PyCaret is training {len(allowed_models)} models with {fold}-fold CV. This may take a few minutes..."):
+            try:
+                # Setup PyCaret environment
+                if problem_type == "Classification":
+                    # Classification setup
+                    clf_setup(
+                        data=df,
+                        target=target_col,
+                        train_size=1 - test_size,
+                        session_id=random_state,
+                        fold=fold,
+                        n_jobs=1,          # single thread to save memory
+                        html=False,
+                        verbose=False,
+                        ignore_low_variance=False,
+                        remove_multicollinearity=False,  # keep simple
+                        log_experiment=False
+                    )
+                    # Compare models and pick best
+                    best_model = clf_compare(
+                        include=allowed_models,
+                        n_select=1,
+                        verbose=False,
+                        sort='Accuracy' if problem_type == "Classification" else 'R2'
+                    )
+                    # Get predictions on test set
+                    predictions_df = clf_predict(best_model, data=df)  # this includes original data + predictions
+                    # Extract test set from PyCaret's environment
+                    X_test = get_config('X_test')
+                    y_test = get_config('y_test')
+                    # Predictions on test set
+                    test_predictions = clf_predict(best_model, data=X_test)['prediction_label']
+                else:
+                    # Regression setup
+                    reg_setup(
+                        data=df,
+                        target=target_col,
+                        train_size=1 - test_size,
+                        session_id=random_state,
+                        fold=fold,
+                        n_jobs=1,
+                        html=False,
+                        verbose=False,
+                        ignore_low_variance=False,
+                        remove_multicollinearity=False,
+                        log_experiment=False
+                    )
+                    best_model = reg_compare(
+                        include=allowed_models,
+                        n_select=1,
+                        verbose=False,
+                        sort='R2'
+                    )
+                    # Get predictions
+                    predictions_df = reg_predict(best_model, data=df)
+                    X_test = get_config('X_test')
+                    y_test = get_config('y_test')
+                    test_predictions = reg_predict(best_model, data=X_test)['prediction_label']
+
+                # Retrieve test predictions and true values
+                # Ensure we have the test data for evaluation later
+                st.session_state.test_data = {'X_test': X_test, 'y_test': y_test}
+                st.session_state.predictions = test_predictions.values
+                st.session_state.model = best_model
+                st.session_state.training_complete = True
+
+                # Get model comparison results
+                comparison_df = pull()  # the comparison dataframe from PyCaret
+
+                # Display success
+                with st.expander("📊 Training Results (click to expand)", expanded=True):
+                    st.markdown("#### 🏆 Best Model")
+                    st.code(str(best_model), language='python')
+                    if hasattr(best_model, 'feature_importances_'):
+                        st.markdown("#### 🔍 Feature Importance (top 10)")
+                        imp_df = pd.DataFrame({'feature': X_test.columns, 'importance': best_model.feature_importances_})
+                        imp_df = imp_df.sort_values('importance', ascending=False).head(10)
+                        st.dataframe(imp_df, use_container_width=True)
+                    st.markdown("#### 📊 Model Comparison (top 10)")
+                    st.dataframe(comparison_df.head(10), use_container_width=True)
+
+                st.success("🎉 Model training completed successfully!")
+                st.session_state.app_page = "📈 Model Evaluation"
+                st.rerun()
+
+            except Exception as e:
+                st.error(f"❌ Training failed: {type(e).__name__}: {str(e)}")
+                print(f"Training error: {type(e).__name__}: {e}")
+
+# ---------- Evaluation page (adapted for PyCaret) ----------
 def evaluation_page():
     st.markdown('<h2 class="sub-header">📈 Model Performance Evaluation</h2>', unsafe_allow_html=True)
 
@@ -924,21 +1018,31 @@ def evaluation_page():
     else:
         feature_names = [f"Feature_{i}" for i in range(X_test.shape[1])]
 
+    # Ensure consistent types
     try:
         y_test = np.asarray(y_test).ravel()
         predictions = np.asarray(predictions).ravel()
 
-        # --- Model Comparison (if available) ---
-        comparison_df = get_model_comparison(model)
-        if comparison_df is not None:
-            with st.expander("🔍 Model Comparison (All Estimators Tried by FLAML)", expanded=False):
-                st.dataframe(comparison_df, use_container_width=True)
-                st.markdown("The table above shows the best configuration found for each estimator type, "
-                            "along with their validation score (lower is better for loss).")
+        # --- Model Comparison (from PyCaret) ---
+        # Since we stored the comparison in pull() during training, we can re-fetch it if needed
+        # However pull() is only available during training. We'll just show the best model info.
+        with st.expander("🔍 Model Information", expanded=False):
+            st.markdown("#### Best Model")
+            st.code(str(model), language='python')
+            if hasattr(model, 'feature_importances_'):
+                st.markdown("#### Feature Importance (all)")
+                imp_df = pd.DataFrame({'feature': feature_names, 'importance': model.feature_importances_})
+                imp_df = imp_df.sort_values('importance', ascending=False)
+                st.dataframe(imp_df, use_container_width=True)
+            elif hasattr(model, 'coef_'):
+                coef = model.coef_.ravel()
+                imp_df = pd.DataFrame({'feature': feature_names, 'coefficient': coef})
+                imp_df = imp_df.sort_values('coefficient', ascending=False)
+                st.dataframe(imp_df, use_container_width=True)
 
         # --- Classification evaluation ---
         if problem_type == "Classification":
-            # Ensure string labels for classification report and confusion matrix
+            # Ensure string labels
             y_test_str = y_test.astype(str)
             predictions_str = predictions.astype(str)
 
@@ -1005,44 +1109,42 @@ def evaluation_page():
                 st.error(f"Failed to generate confusion matrix: {e}")
 
             # --- ROC & PR curves (binary) ---
-            if hasattr(model, 'predict_proba'):
+            if hasattr(model, 'predict_proba') and len(np.unique(y_test_str)) == 2:
                 try:
-                    # For binary classification, we need probabilities. Use encoded labels if available.
-                    # Since we stored the test data with original labels, we can get encoded y_test from session if needed.
-                    # But for simplicity, we check if the model's predict_proba returns two columns.
-                    y_proba = model.predict_proba(X_test)
-                    if y_proba.shape[1] == 2:
-                        # We need the true labels in numeric form for roc_curve. Use label encoder from training.
-                        if st.session_state.label_encoder is not None:
-                            y_test_encoded = st.session_state.label_encoder.transform(y_test_str)
-                            pos_label = 1  # After encoding, positive class is 1
-                            fpr, tpr, _ = roc_curve(y_test_encoded, y_proba[:, 1], pos_label=pos_label)
-                            roc_auc = auc(fpr, tpr)
-                            fig_roc = go.Figure()
-                            fig_roc.add_trace(go.Scatter(x=fpr, y=tpr, mode='lines', name=f'ROC (AUC={roc_auc:.3f})'))
-                            fig_roc.add_trace(go.Scatter(x=[0,1], y=[0,1], mode='lines', name='Random', line=dict(dash='dash')))
-                            fig_roc.update_layout(xaxis_title='False Positive Rate', yaxis_title='True Positive Rate',
-                                                    title='ROC Curve')
-                            st.plotly_chart(fig_roc, use_container_width=True)
+                    # For binary, we need numeric labels
+                    le = LabelEncoder()
+                    y_test_num = le.fit_transform(y_test_str)
+                    y_proba = model.predict_proba(X_test)[:, 1]
 
-                            precisions, recalls, _ = precision_recall_curve(y_test_encoded, y_proba[:, 1], pos_label=pos_label)
-                            fig_pr = go.Figure()
-                            fig_pr.add_trace(go.Scatter(x=recalls, y=precisions, mode='lines', name='PR Curve'))
-                            fig_pr.update_layout(xaxis_title='Recall', yaxis_title='Precision',
-                                                    title='Precision-Recall Curve')
-                            st.plotly_chart(fig_pr, use_container_width=True)
+                    fpr, tpr, _ = roc_curve(y_test_num, y_proba)
+                    roc_auc = auc(fpr, tpr)
+                    fig_roc = go.Figure()
+                    fig_roc.add_trace(go.Scatter(x=fpr, y=tpr, mode='lines', name=f'ROC (AUC={roc_auc:.3f})'))
+                    fig_roc.add_trace(go.Scatter(x=[0,1], y=[0,1], mode='lines', name='Random', line=dict(dash='dash')))
+                    fig_roc.update_layout(xaxis_title='False Positive Rate', yaxis_title='True Positive Rate',
+                                            title='ROC Curve')
+                    st.plotly_chart(fig_roc, use_container_width=True)
+
+                    precisions, recalls, _ = precision_recall_curve(y_test_num, y_proba)
+                    fig_pr = go.Figure()
+                    fig_pr.add_trace(go.Scatter(x=recalls, y=precisions, mode='lines', name='PR Curve'))
+                    fig_pr.update_layout(xaxis_title='Recall', yaxis_title='Precision',
+                                            title='Precision-Recall Curve')
+                    st.plotly_chart(fig_pr, use_container_width=True)
                 except Exception as e:
                     st.info(f"Could not compute ROC/PR curves: {e}")
 
             # --- Threshold tuning (binary) ---
-            if hasattr(model, 'predict_proba') and st.session_state.label_encoder is not None and len(np.unique(y_test_str)) == 2:
+            if hasattr(model, 'predict_proba') and len(np.unique(y_test_str)) == 2:
                 st.markdown("### ⚙️ Decision Threshold Tuning & Cost Simulation")
                 st.write("Adjust the classification threshold to optimize for your business needs.")
                 y_proba = model.predict_proba(X_test)[:, 1]
                 threshold = st.slider("Threshold", 0.0, 1.0, 0.5, 0.01)
                 y_pred_adj = (y_proba >= threshold).astype(int)
-                # Decode to original labels
-                y_pred_adj_labels = st.session_state.label_encoder.inverse_transform(y_pred_adj)
+                # Decode back to original labels
+                le = LabelEncoder()
+                le.fit(y_test_str)
+                y_pred_adj_labels = le.inverse_transform(y_pred_adj)
 
                 tn, fp, fn, tp = confusion_matrix(y_test_str, y_pred_adj_labels).ravel()
                 st.markdown("**Simulate business costs:**")
@@ -1055,17 +1157,11 @@ def evaluation_page():
                 st.metric("Total Simulated Cost", f"${total_cost:,.2f}")
 
                 adj_acc = accuracy_score(y_test_str, y_pred_adj_labels)
-                adj_prec = precision_score(y_test_str, y_pred_adj_labels, average='binary', pos_label=st.session_state.label_encoder.classes_[1])
-                adj_rec = recall_score(y_test_str, y_pred_adj_labels, average='binary', pos_label=st.session_state.label_encoder.classes_[1])
+                adj_prec = precision_score(y_test_str, y_pred_adj_labels, average='binary', pos_label=le.classes_[1])
+                adj_rec = recall_score(y_test_str, y_pred_adj_labels, average='binary', pos_label=le.classes_[1])
                 st.write(f"At threshold {threshold:.2f}: Accuracy={adj_acc:.4f}, Precision={adj_prec:.4f}, Recall={adj_rec:.4f}")
 
-            # --- Feature importance ---
-            st.markdown("### 🔍 Feature Importance")
-            if hasattr(model, 'model'):
-                inner_model = model.model
-            else:
-                inner_model = model
-            plot_feature_importance(inner_model, feature_names, problem_type)
+            # --- Feature importance (already displayed above) ---
 
             # --- Detailed classification report ---
             st.markdown("### 📝 Detailed Classification Report")
@@ -1076,11 +1172,10 @@ def evaluation_page():
             except Exception as e:
                 st.error(f"Failed to generate classification report: {e}")
 
-            # --- Export buttons for Classification (direct download) ---
+            # --- Export buttons for Classification ---
             st.markdown("---")
             col1, col2 = st.columns([1, 2])
             with col1:
-                # Build report text for PDF
                 report_lines = []
                 report_lines.append("# Machine Learning Model Evaluation Report")
                 report_lines.append(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
@@ -1101,10 +1196,7 @@ def evaluation_page():
                 report_lines.append(classification_report(y_test_str, predictions_str, zero_division=0))
                 report_lines.append("")
                 report_lines.append("## Best Model")
-                report_lines.append(str(model.model))
-                if hasattr(model, 'best_config'):
-                    report_lines.append("Best hyperparameters:")
-                    report_lines.append(str(model.best_config))
+                report_lines.append(str(model))
                 pdf_bytes = text_to_simple_pdf_bytes("\n".join(report_lines), title="ML Evaluation Report")
                 st.download_button(
                     label="📥 Download Full Evaluation Report (PDF)",
@@ -1128,9 +1220,7 @@ def evaluation_page():
                     f"- Weighted F1: {f1:.4f}",
                     "",
                     "## Best Model",
-                    f"```\n{model.model}\n```",
-                    "Best hyperparameters:" if hasattr(model, 'best_config') else "",
-                    f"```json\n{model.best_config}\n```" if hasattr(model, 'best_config') else ""
+                    f"```\n{model}\n```"
                 ])
                 st.download_button(
                     label="📥 Download Report (Markdown)",
@@ -1142,7 +1232,7 @@ def evaluation_page():
                 )
 
         # --- Regression evaluation ---
-        else:  # Regression
+        else:
             y_test = y_test.astype(float)
             predictions = predictions.astype(float)
 
@@ -1213,15 +1303,9 @@ def evaluation_page():
             except Exception as e:
                 st.error(f"Failed to generate residual plot: {e}")
 
-            # --- Feature importance for regression ---
-            st.markdown("### 🔍 Feature Importance")
-            if hasattr(model, 'model'):
-                inner_model = model.model
-            else:
-                inner_model = model
-            plot_feature_importance(inner_model, feature_names, problem_type)
+            # --- Feature importance (already displayed above) ---
 
-            # --- Export buttons for Regression (direct download) ---
+            # --- Export buttons for Regression ---
             st.markdown("---")
             col1, col2 = st.columns([1, 2])
             with col1:
@@ -1238,10 +1322,7 @@ def evaluation_page():
                 report_lines.append(f"- R²: {r2:.4f}")
                 report_lines.append("")
                 report_lines.append("## Best Model")
-                report_lines.append(str(model.model))
-                if hasattr(model, 'best_config'):
-                    report_lines.append("Best hyperparameters:")
-                    report_lines.append(str(model.best_config))
+                report_lines.append(str(model))
                 pdf_bytes = text_to_simple_pdf_bytes("\n".join(report_lines), title="ML Evaluation Report")
                 st.download_button(
                     label="📥 Download Full Evaluation Report (PDF)",
@@ -1265,9 +1346,7 @@ def evaluation_page():
                     f"- R²: {r2:.4f}",
                     "",
                     "## Best Model",
-                    f"```\n{model.model}\n```",
-                    "Best hyperparameters:" if hasattr(model, 'best_config') else "",
-                    f"```json\n{model.best_config}\n```" if hasattr(model, 'best_config') else ""
+                    f"```\n{model}\n```"
                 ])
                 st.download_button(
                     label="📥 Download Report (Markdown)",
@@ -1279,11 +1358,15 @@ def evaluation_page():
                 )
 
         # --- Best model details ---
-        st.markdown("### 🏆 Best Model Found by FLAML")
+        st.markdown("### 🏆 Best Model Found by PyCaret")
         if model is not None:
-            st.markdown(f"**Model Object:** {model.model}")
-            if hasattr(model, 'best_config'):
-                st.json(model.best_config)
+            st.code(str(model), language='python')
+            if hasattr(model, 'feature_importances_'):
+                st.markdown("#### Feature Importance (Top 20)")
+                imp_df = pd.DataFrame({'feature': feature_names, 'importance': model.feature_importances_})
+                imp_df = imp_df.sort_values('importance', ascending=False).head(20)
+                fig_imp = px.bar(imp_df, x='importance', y='feature', orientation='h', title='Feature Importance')
+                st.plotly_chart(fig_imp, use_container_width=True)
 
         # Navigation
         st.markdown("---")
@@ -1300,183 +1383,7 @@ def evaluation_page():
         st.error(f"Unknown error occurred during evaluation: {str(e)}")
         st.info("Please try retraining the model or check the data format.")
 
-# ---------- Training page (fixed: encode classification target, avoid logistic regression for multiclass) ----------
-def training_page():
-    st.markdown('<h2 class="sub-header">📐 Automated Model Training with FLAML</h2>', unsafe_allow_html=True)
-
-    # ---- Check FLAML availability ----
-    if not flaml_available:
-        st.error(
-            "⚠️ FLAML is not installed. Please install it with `pip install flaml[automl]` to use auto‑ML."
-        )
-        if st.button("Go to Data Upload"):
-            st.session_state.app_page = "📁 Data Upload"
-            st.rerun()
-        return
-
-    # ---- Check prerequisites ----
-    if st.session_state.data is None or st.session_state.target_column is None:
-        st.warning("⚠️ Please upload data and set target column first.")
-        if st.button("Go to Data Upload"):
-            st.session_state.app_page = "📁 Data Upload"
-            st.rerun()
-        return
-
-    df = st.session_state.data
-    target_col = st.session_state.target_column
-    problem_type = st.session_state.problem_type
-
-    st.markdown(f"""
-    <div class="card">
-    <h4>Training Configuration</h4>
-    <ul>
-        <li><strong>Problem Type:</strong> {problem_type}</li>
-        <li><strong>Target Column:</strong> {target_col}</li>
-        <li><strong>Dataset Shape:</strong> {df.shape}</li>
-    </ul>
-    </div>
-    """, unsafe_allow_html=True)
-
-    # ---- Training mode presets ----
-    if "train_time" not in st.session_state:
-        st.session_state.train_time = 10
-    if "training_mode" not in st.session_state:
-        st.session_state.training_mode = "Balanced"
-
-    col_mode, _ = st.columns([1, 2])
-    with col_mode:
-        mode = st.selectbox(
-            "Training Mode Preset",
-            ["Fast", "Balanced", "Accurate"],
-            index=["Fast", "Balanced", "Accurate"].index(st.session_state.training_mode),
-            help="Fast: short time; Accurate: longer time"
-        )
-    if mode != st.session_state.training_mode:
-        st.session_state.training_mode = mode
-        if mode == "Fast":
-            st.session_state.train_time = 2
-        elif mode == "Balanced":
-            st.session_state.train_time = 10
-        else:  # Accurate
-            st.session_state.train_time = 30
-
-    # ---- User controls ----
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        test_size = st.slider("Test Size (%)", 10, 40, 20) / 100
-    with col2:
-        time_budget_mins = st.slider(
-            "Time Budget (minutes)", 1, 60, value=st.session_state.train_time, key="train_time"
-        )
-    with col3:
-        random_state = st.number_input("Random State", 0, 100, 42)
-
-    # ---- Train button ----
-    if st.button("🚀 Start Automated Training", type="primary", use_container_width=True):
-        # Prepare data
-        X = df.drop(columns=[target_col])
-        y = df[target_col]
-
-        # Basic data check
-        if X.isnull().any().any():
-            st.warning("⚠️ Your dataset contains missing values. Consider using the Data Cleaning page first.")
-        if y.isnull().any():
-            st.error("❌ Target column contains missing values. Please handle them before training.")
-            st.stop()
-
-        X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=test_size, random_state=random_state
-        )
-        st.session_state.test_data = {'X_test': X_test, 'y_test': y_test}
-
-        # Encode target for classification
-        encoder = None
-        if problem_type == "Classification":
-            encoder = LabelEncoder()
-            y_train_encoded = encoder.fit_transform(y_train)
-            y_test_encoded = encoder.transform(y_test)
-
-            # Check for only one class
-            if len(np.unique(y_train_encoded)) == 1:
-                st.error("❌ Target variable has only one class. Classification requires at least two classes.")
-                st.stop()
-            st.session_state.label_encoder = encoder
-        else:
-            y_train_encoded = y_train
-            y_test_encoded = y_test
-
-        with st.spinner("🧠 FLAML is searching for the best model. This may take several minutes..."):
-            try:
-                task = 'classification' if problem_type == 'Classification' else 'regression'
-                metric = 'accuracy' if task == 'classification' else 'r2'
-
-                # Choose estimators based on problem type and number of classes
-                if task == 'classification':
-                    n_classes = len(np.unique(y_train_encoded))
-                    if n_classes == 2:
-                        estimator_list = ["lgbm", "rf", "lrl1"]   # binary classification
-                    else:
-                        estimator_list = ["lgbm", "rf"]           # multi-class classification
-                else:
-                    estimator_list = ["lgbm", "rf", "lrl2"]       # regression
-
-                automl = AutoML()
-                automl.fit(
-                    X_train, y_train_encoded,
-                    task=task,
-                    time_budget=time_budget_mins * 60,
-                    metric=metric,
-                    eval_method='holdout',
-                    split_ratio=0.2,
-                    estimator_list=estimator_list,
-                    n_jobs=-1,
-                    log_file_name='flaml.log',
-                    verbose=0
-                )
-
-                # Predict and decode if necessary
-                y_pred_encoded = automl.predict(X_test)
-                if problem_type == "Classification" and encoder is not None:
-                    y_pred = encoder.inverse_transform(y_pred_encoded.astype(int))
-                else:
-                    y_pred = y_pred_encoded
-
-                # Score
-                if problem_type == "Classification":
-                    score = accuracy_score(y_test_encoded, y_pred_encoded)
-                else:
-                    score = automl.score(X_test, y_test)
-
-                # Store results
-                st.session_state.model = automl
-                st.session_state.predictions = y_pred
-                st.session_state.training_complete = True
-
-                # Show success
-                with st.expander("📊 Training Results (click to expand)", expanded=True):
-                    col_res1, col_res2 = st.columns(2)
-                    with col_res1:
-                        st.markdown("#### 🏆 Best Model")
-                        st.code(str(automl.model), language='python')
-                    with col_res2:
-                        st.markdown("#### ⚙️ Best Hyperparameters")
-                        st.json(automl.best_config)
-                    st.markdown(f"#### 📈 Test Score ({metric}): **{score:.4f}**")
-
-                st.success("🎉 Model training completed successfully!")
-                st.session_state.app_page = "📈 Model Evaluation"
-                st.rerun()
-
-            except AssertionError as e:
-                if "LogisticRegression" in str(e):
-                    st.error("❌ Training failed because FLAML attempted to use logistic regression for a multi‑class classification. The code now avoids this by using tree‑based models for multi‑class tasks. Please check your target variable and ensure it has only two classes if you need binary classification.")
-                else:
-                    st.error(f"❌ Training failed: {type(e).__name__}: {str(e)}")
-            except Exception as e:
-                st.error(f"❌ Training failed: {type(e).__name__}: {str(e)}")
-                print(f"Training error: {type(e).__name__}: {e}")
-
-# ---------- Export page ----------
+# ---------- Export page (unchanged) ----------
 def export_page():
     st.markdown('<h2 class="sub-header">💾 Export Model and Results</h2>', unsafe_allow_html=True)
     if not st.session_state.training_complete:
@@ -1490,8 +1397,8 @@ def export_page():
     with col1:
         st.markdown("#### 📊 Model Information")
         if st.button("Show Model Details"):
-            st.write("**Best Model:**", st.session_state.model.model)
-            st.write("**Best Config:**", st.session_state.model.best_config)
+            st.write("**Best Model:**", st.session_state.model)
+            # PyCaret model does not have best_config attribute, so skip
     with col2:
         st.markdown("#### 📊 Model Report")
         if st.button("Generate Model Report"):
@@ -1516,12 +1423,11 @@ def export_page():
 - Features: {feature_count}
 
 ## Model Information
-- Best Model: {st.session_state.model.model}
-- Best Hyperparameters: {st.session_state.model.best_config}
+- Best Model: {st.session_state.model}
 - Training Completed: {st.session_state.training_complete}
 
 ## Notes
-This model was generated using FLAML AutoML through the No-Code ML Platform.
+This model was generated using PyCaret AutoML through the No-Code ML Platform.
 """
             st.code(report_content, language='markdown')
             pdf_bytes = text_to_simple_pdf_bytes(report_content, title="ML Model Report")
@@ -1613,13 +1519,13 @@ def dashboard_page():
         - CSV data upload
         - Data cleaning
         - Automated EDA
-        - AutoML with FLAML
+        - AutoML with PyCaret
         - Model evaluation with interpretability
         - Export model report
         """)
-        if not flaml_available:
-            st.error("⚠️ FLAML not installed. Install with: `pip install flaml[automl]`")
-            st.code("pip install flaml[automl]", language="bash")
+        if not PYCARET_AVAILABLE:
+            st.error("⚠️ PyCaret not installed. Install with: `pip install pycaret[full]`")
+            st.code("pip install pycaret[full]", language="bash")
 
         if st.button("👋🏻 Logout", type="primary"):
             st.session_state.logged_in = False

@@ -6,4 +6,7 @@ seaborn
 plotly
 scikit-learn
 supabase
-flaml[automl]
+pycaret
+psutil
+scipy
+shap
