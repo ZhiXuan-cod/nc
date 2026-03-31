@@ -43,9 +43,11 @@ except ImportError:
 
 # ---------- Minimal PDF generator ----------
 def _pdf_escape(text: str) -> str:
+    """Escape special characters for PDF text."""
     return text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
 
 def text_to_simple_pdf_bytes(text: str, title: str = "ML Model Report") -> bytes:
+    """Convert plain text to a minimal PDF document (bytes)."""
     page_w, page_h = 612, 792
     margin_x, margin_y = 54, 54
     font_size = 10
@@ -120,6 +122,7 @@ def text_to_simple_pdf_bytes(text: str, title: str = "ML Model Report") -> bytes
 
 # ---------- Background image helper ----------
 def get_base64_of_file(file_path):
+    """Read a local image file and return its base64 string."""
     try:
         with open(file_path, "rb") as f:
             data = f.read()
@@ -128,6 +131,7 @@ def get_base64_of_file(file_path):
         return None
 
 def set_bg_image_local(image_path):
+    """Set background image from a local file; fallback to gradient if missing."""
     bin_str = get_base64_of_file(image_path)
     if bin_str:
         page_bg_img = f"""
@@ -153,6 +157,7 @@ def set_bg_image_local(image_path):
 
 # ---------- Password hashing helpers ----------
 def hash_password(password: str, iterations: int = 100_000) -> str:
+    """Hash a password using PBKDF2."""
     salt = os.urandom(16)
     pwd_hash = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, iterations)
     return (
@@ -162,6 +167,7 @@ def hash_password(password: str, iterations: int = 100_000) -> str:
     )
 
 def verify_password(plain_password: str, stored_password: str) -> bool:
+    """Verify a plain password against a stored hash."""
     if not stored_password:
         return False
 
@@ -184,7 +190,7 @@ def verify_password(plain_password: str, stored_password: str) -> bool:
     # Legacy plain-text fallback
     return stored_password == plain_password
 
-# ---------- Supabase client (exactly as in your example code) ----------
+# ---------- Supabase client ----------
 if "supabase" not in st.session_state:
     try:
         url = st.secrets["supabase"]["url"]
@@ -195,6 +201,7 @@ if "supabase" not in st.session_state:
         st.session_state.supabase = None
 
 def register_user(email, password, name):
+    """Register a new user in Supabase."""
     if st.session_state.supabase is None:
         return False, "Supabase not connected"
     try:
@@ -208,6 +215,7 @@ def register_user(email, password, name):
         return False, f"Registration failed: {e}"
 
 def authenticate_user(email, password):
+    """Authenticate user credentials."""
     if st.session_state.supabase is None:
         return False, None
     try:
@@ -231,6 +239,7 @@ if "user_name" not in st.session_state:
     st.session_state.user_name = ""
 
 def go_to(page):
+    """Navigate to a different page."""
     st.session_state.page = page
 
 # ---------- Page configuration ----------
@@ -321,6 +330,7 @@ if "label_encoder" not in st.session_state:
 
 # ---------- Helper function for cleaning ----------
 def apply_cleaning(df, drop_duplicates, missing_option, outlier_option, encode_option, scale_option, cols_to_drop):
+    """Apply user-selected cleaning operations to the dataframe."""
     cleaned = df.copy()
 
     if drop_duplicates:
@@ -389,8 +399,9 @@ def apply_cleaning(df, drop_duplicates, missing_option, outlier_option, encode_o
 
     return cleaned
 
-# ---------- PyCaret safe setup ----------
+# ---------- PyCaret safe setup (handles version differences) ----------
 def _pycaret_setup_safe(setup_fn, **kwargs):
+    """Call PyCaret setup with only the parameters the function accepts."""
     import inspect
     try:
         params = set(inspect.signature(setup_fn).parameters.keys())
@@ -416,6 +427,7 @@ def _pycaret_setup_safe(setup_fn, **kwargs):
 
 # ---------- Report generation ----------
 def generate_report_text(problem_type, metrics, model, target_col, dataset_shape=None):
+    """Generate a markdown report of the model performance."""
     lines = []
     lines.append("# Machine Learning Model Evaluation Report")
     lines.append(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
@@ -434,8 +446,9 @@ def generate_report_text(problem_type, metrics, model, target_col, dataset_shape
 
 # ---------- Dashboard subpages ----------
 def front_page():
-    set_bg_image_local("FrontPage.jpg")
-    # Force all text on the front page to be white
+    """Landing page with video and welcome message."""
+    set_bg_image_local("FrontPage.jpg")  # Ensure this file exists or use fallback
+    # Force white text on front page
     st.markdown("""
     <style>
         .stApp {
@@ -512,6 +525,7 @@ def front_page():
             st.rerun()
 
 def login_page():
+    """Login and registration page."""
     set_bg_image_local("login.jpg")
     st.markdown("""
     <style>
@@ -609,8 +623,8 @@ def login_page():
         st.markdown('</div>', unsafe_allow_html=True)
         st.markdown('</div>', unsafe_allow_html=True)
 
-# ---------- Upload page ----------
 def upload_page():
+    """Data upload and target selection."""
     st.markdown('<h2 class="sub-header">📁 Upload Your Dataset</h2>', unsafe_allow_html=True)
     col1, col2 = st.columns([2, 1])
     with col1:
@@ -684,6 +698,7 @@ def upload_page():
             st.button("➡️ Go to Data Cleaning (set target first)", disabled=True, use_container_width=True)
 
 def cleaning_page():
+    """Data cleaning interface."""
     st.markdown('<h2 class="sub-header">🧹 Data Cleaning</h2>', unsafe_allow_html=True)
 
     if st.session_state.data is None:
@@ -744,6 +759,7 @@ def cleaning_page():
             st.button("✅ Apply Cleaning (preview first)", disabled=True, use_container_width=True)
 
 def eda_page():
+    """Exploratory data analysis page."""
     st.markdown('<h2 class="sub-header">🔍 Exploratory Data Analysis</h2>', unsafe_allow_html=True)
     if st.session_state.data is None:
         st.warning("⚠️ Please upload data first from the 'Data Upload' page.")
@@ -859,6 +875,7 @@ def eda_page():
             st.button("➡️ Go to Model Training (set target first)", disabled=True, use_container_width=True)
 
 def training_page():
+    """Automated model training with PyCaret."""
     st.markdown('<h2 class="sub-header">📐 Automated Model Training with PyCaret</h2>', unsafe_allow_html=True)
 
     if not PYCARET_AVAILABLE:
@@ -878,6 +895,41 @@ def training_page():
     df = st.session_state.data.copy()
     target_col = st.session_state.target_column
     problem_type = st.session_state.problem_type
+
+    # ----- Data validation before training -----
+    # Check target column for missing values
+    if df[target_col].isnull().sum() > 0:
+        st.error(f"Target column '{target_col}' contains missing values. Please handle them in Data Cleaning.")
+        return
+
+    # Check data type for target column
+    if problem_type == "Classification":
+        if df[target_col].dtype in ['float64', 'int64']:
+            # Check if target is continuous (regression) – warn user
+            unique_vals = df[target_col].nunique()
+            if unique_vals > 20:
+                st.warning(f"Target column '{target_col}' has {unique_vals} unique numeric values. "
+                           "If this is a classification problem with many categories, training may be slow or inaccurate. "
+                           "Consider converting to categorical or using regression.")
+        else:
+            # Convert to string for classification
+            df[target_col] = df[target_col].astype(str)
+    elif problem_type == "Regression":
+        if not pd.api.types.is_numeric_dtype(df[target_col]):
+            st.error(f"Target column '{target_col}' is not numeric. Regression requires a numeric target.")
+            return
+
+    # Check for infinite values in target
+    if problem_type == "Regression" and np.isinf(df[target_col]).any():
+        st.error("Target column contains infinite values. Please remove or replace them.")
+        return
+
+    # Check for infinite values in features
+    numeric_cols = df.select_dtypes(include=[np.number]).columns
+    for col in numeric_cols:
+        if np.isinf(df[col]).any():
+            st.warning(f"Feature column '{col}' contains infinite values. They may cause training errors. Consider cleaning them.")
+    # --------------------------------
 
     if problem_type == "Classification" and df[target_col].nunique() > 20:
         st.warning(f"Target column has {df[target_col].nunique()} unique values. Classification may be slow or have low accuracy. Consider regression or reduce categories.")
@@ -934,13 +986,14 @@ def training_page():
 
     sample_frac = st.slider("Sample fraction (optional, for speed)", 0.1, 1.0, 1.0, 0.05)
     if sample_frac < 1.0:
-        df = df.sample(frac=sample_frac, random_state=random_state)
+        df = df.sample(frac=sample_frac, random_state=random_state).reset_index(drop=True)  # Reset index
         st.info(f"Using {len(df)} rows after sampling (original: {st.session_state.data.shape[0]}).")
 
     if st.button("🚀 Start Automated Training", type="primary", use_container_width=True):
         with st.spinner(f"🧠 PyCaret is training {len(allowed_models)} models with {fold}-fold CV. This may take a few minutes..."):
             try:
                 if problem_type == "Classification":
+                    # Optionally set verbose=True for debugging
                     _pycaret_setup_safe(
                         clf_setup,
                         data=df,
@@ -950,7 +1003,7 @@ def training_page():
                         fold=fold,
                         n_jobs=1,
                         html=False,
-                        verbose=False,
+                        verbose=False,   # Change to True to see detailed logs
                         ignore_low_variance=False,
                         remove_multicollinearity=False,
                         log_experiment=False
@@ -1023,6 +1076,7 @@ def training_page():
                 print(f"Training error: {type(e).__name__}: {e}")
 
 def evaluation_page():
+    """Model evaluation page with metrics, plots, and reports."""
     st.markdown('<h2 class="sub-header">📈 Model Performance Evaluation</h2>', unsafe_allow_html=True)
 
     if not st.session_state.training_complete or st.session_state.model is None:
@@ -1348,6 +1402,9 @@ def evaluation_page():
         st.info("Please try retraining the model or check the data format.")
 
 def export_page():
+    """Export model, reports, and session information."""
+    import pickle  # Added missing import
+
     st.markdown('<h2 class="sub-header">💾 Export Model and Results</h2>', unsafe_allow_html=True)
     if not st.session_state.training_complete:
         st.warning("⚠️ Please train a model first to export results.")
@@ -1445,9 +1502,10 @@ This model was generated using PyCaret AutoML through the No-Code ML Platform.
             st.session_state.app_page = "📁 Data Upload"
             st.rerun()
 
-# ---------- Dashboard ----------
 def dashboard_page():
-    set_bg_image_local("purple.jpg")
+    """Main dashboard with sidebar navigation."""
+    # Changed background to purple.png (was purple.jpg)
+    set_bg_image_local("purple.png")   # Ensure purple.png exists in the same directory
 
     st.markdown("""
     <style>
