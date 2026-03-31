@@ -21,14 +21,19 @@ from sklearn.metrics import (
 import warnings
 warnings.filterwarnings('ignore')
 
-# ---------- Optional imports with fallbacks ----------
-try:
-    from supabase import create_client
-    SUPABASE_AVAILABLE = True
-except ImportError:
-    SUPABASE_AVAILABLE = False
-    st.warning("Supabase client not installed. Authentication will be disabled. Install with `pip install supabase`.")
+# ---------- Supabase import ----------
+from supabase import create_client
 
+# ---------- PyCaret imports ----------
+try:
+    from pycaret.classification import setup as clf_setup, compare_models as clf_compare, predict_model as clf_predict, get_config, pull, save_model as pycaret_save_model
+    from pycaret.regression import setup as reg_setup, compare_models as reg_compare, predict_model as reg_predict
+    PYCARET_AVAILABLE = True
+except ImportError:
+    PYCARET_AVAILABLE = False
+    st.warning("⚠️ PyCaret not installed. Install with 'pip install pycaret' to use AutoML.")
+
+# ---------- Scipy for outlier detection ----------
 try:
     import scipy.stats as stats
     SCIPY_AVAILABLE = True
@@ -36,21 +41,11 @@ except ImportError:
     SCIPY_AVAILABLE = False
     st.warning("Scipy not installed. Outlier detection (Z‑score) will be disabled. Install with `pip install scipy`.")
 
-try:
-    from pycaret.classification import setup as clf_setup, compare_models as clf_compare, predict_model as clf_predict, get_config, pull, save_model as pycaret_save_model
-    from pycaret.regression import setup as reg_setup, compare_models as reg_compare, predict_model as reg_predict
-    PYCARET_AVAILABLE = True
-except ImportError:
-    PYCARET_AVAILABLE = False
-    st.warning("⚠️ PyCaret not installed. Install with `pip install pycaret` to use AutoML.")
-
-# ---------- Helper functions ----------
+# ---------- Minimal PDF generator ----------
 def _pdf_escape(text: str) -> str:
-    """Escape special characters for PDF text streams."""
     return text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
 
 def text_to_simple_pdf_bytes(text: str, title: str = "ML Model Report") -> bytes:
-    """Generate a minimal PDF from plain text."""
     page_w, page_h = 612, 792
     margin_x, margin_y = 54, 54
     font_size = 10
@@ -123,16 +118,16 @@ def text_to_simple_pdf_bytes(text: str, title: str = "ML Model Report") -> bytes
 
     return header + body + xref_bytes + trailer
 
-def get_base64_of_file(file_path: str) -> Optional[str]:
-    """Read file and return base64 encoded string, or None if not found."""
-    if not os.path.exists(file_path):
+# ---------- Background image helper ----------
+def get_base64_of_file(file_path):
+    try:
+        with open(file_path, "rb") as f:
+            data = f.read()
+        return base64.b64encode(data).decode()
+    except FileNotFoundError:
         return None
-    with open(file_path, "rb") as f:
-        data = f.read()
-    return base64.b64encode(data).decode()
 
-def set_bg_image_local(image_path: str) -> None:
-    """Set background image from local file, fallback to gradient."""
+def set_bg_image_local(image_path):
     bin_str = get_base64_of_file(image_path)
     if bin_str:
         page_bg_img = f"""
@@ -156,8 +151,8 @@ def set_bg_image_local(image_path: str) -> None:
         """
         st.markdown(fallback_bg, unsafe_allow_html=True)
 
+# ---------- Password hashing helpers ----------
 def hash_password(password: str, iterations: int = 100_000) -> str:
-    """Hash password using PBKDF2."""
     salt = os.urandom(16)
     pwd_hash = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, iterations)
     return (
@@ -167,16 +162,12 @@ def hash_password(password: str, iterations: int = 100_000) -> str:
     )
 
 def verify_password(plain_password: str, stored_password: str) -> bool:
-    """Verify password against stored hash (supports legacy plain text)."""
     if not stored_password:
         return False
 
     if stored_password.startswith("pbkdf2_sha256$"):
         try:
-            parts = stored_password.split("$", 3)
-            if len(parts) != 4:
-                return False
-            _, iterations_str, salt_b64, hash_b64 = parts
+            _, iterations_str, salt_b64, hash_b64 = stored_password.split("$", 3)
             iterations = int(iterations_str)
             salt = base64.b64decode(salt_b64.encode("utf-8"))
             expected_hash = base64.b64decode(hash_b64.encode("utf-8"))
@@ -193,11 +184,19 @@ def verify_password(plain_password: str, stored_password: str) -> bool:
     # Legacy plain-text fallback
     return stored_password == plain_password
 
-# ---------- Supabase user functions ----------
-def register_user(email: str, password: str, name: str) -> Tuple[bool, str]:
-    """Register a new user in Supabase."""
-    if not SUPABASE_AVAILABLE or st.session_state.supabase is None:
-        return False, "Supabase not connected. Please check your secrets."
+# ---------- Supabase client (exactly as in your example code) ----------
+if "supabase" not in st.session_state:
+    try:
+        url = st.secrets["supabase"]["url"]
+        key = st.secrets["supabase"]["key"]
+        st.session_state.supabase = create_client(url, key)
+    except Exception as e:
+        st.error(f"Supabase connection failed: {e}")
+        st.session_state.supabase = None
+
+def register_user(email, password, name):
+    if st.session_state.supabase is None:
+        return False, "Supabase not connected"
     try:
         response = st.session_state.supabase.table("users").select("*").eq("email", email).execute()
         if len(response.data) > 0:
@@ -208,9 +207,8 @@ def register_user(email: str, password: str, name: str) -> Tuple[bool, str]:
     except Exception as e:
         return False, f"Registration failed: {e}"
 
-def authenticate_user(email: str, password: str) -> Tuple[bool, Optional[str]]:
-    """Authenticate a user and return (success, name)."""
-    if not SUPABASE_AVAILABLE or st.session_state.supabase is None:
+def authenticate_user(email, password):
+    if st.session_state.supabase is None:
         return False, None
     try:
         response = st.session_state.supabase.table("users").select("*").eq("email", email).execute()
@@ -224,140 +222,16 @@ def authenticate_user(email: str, password: str) -> Tuple[bool, Optional[str]]:
         st.error(f"Authentication failed: {e}")
         return False, None
 
-# ---------- Data cleaning ----------
-def apply_cleaning(df: pd.DataFrame,
-                   drop_duplicates: bool,
-                   missing_option: str,
-                   outlier_option: str,
-                   encode_option: str,
-                   scale_option: str,
-                   cols_to_drop: List[str]) -> pd.DataFrame:
-    """Apply selected cleaning operations to the DataFrame."""
-    cleaned = df.copy()
+# ---------- Page navigation ----------
+if "page" not in st.session_state:
+    st.session_state.page = "front"
+if "logged_in" not in st.session_state:
+    st.session_state.logged_in = False
+if "user_name" not in st.session_state:
+    st.session_state.user_name = ""
 
-    if drop_duplicates:
-        cleaned = cleaned.drop_duplicates()
-
-    # Handle missing values
-    if missing_option != "None":
-        if missing_option == "Drop rows with any missing":
-            cleaned = cleaned.dropna()
-        elif missing_option == "Drop columns with any missing":
-            cleaned = cleaned.dropna(axis=1)
-        elif missing_option == "Fill numeric with mean":
-            num_cols = cleaned.select_dtypes(include=[np.number]).columns
-            for col in num_cols:
-                cleaned[col] = cleaned[col].fillna(cleaned[col].mean())
-        elif missing_option == "Fill numeric with median":
-            num_cols = cleaned.select_dtypes(include=[np.number]).columns
-            for col in num_cols:
-                cleaned[col] = cleaned[col].fillna(cleaned[col].median())
-        elif missing_option == "Fill categorical with mode":
-            cat_cols = cleaned.select_dtypes(include=['object']).columns
-            for col in cat_cols:
-                cleaned[col] = cleaned[col].fillna(cleaned[col].mode()[0] if not cleaned[col].mode().empty else "Unknown")
-
-    # Handle outliers
-    if outlier_option != "None" and SCIPY_AVAILABLE:
-        num_cols = cleaned.select_dtypes(include=[np.number]).columns
-        if len(num_cols) == 0:
-            st.warning("No numerical columns found for outlier handling.")
-        elif outlier_option == "Remove rows with Z-score > 3":
-            numeric_subset = cleaned[num_cols].dropna()
-            if not numeric_subset.empty:
-                z_scores = np.abs(stats.zscore(numeric_subset, nan_policy='omit'))
-                if np.ndim(z_scores) == 1:
-                    z_scores = z_scores.reshape(-1, 1)
-                outlier_rows = (z_scores > 3).any(axis=1)
-                outlier_idx = numeric_subset.index[outlier_rows]
-                cleaned = cleaned.drop(index=outlier_idx)
-        elif outlier_option == "Cap at 1st and 99th percentile":
-            for col in num_cols:
-                q1 = cleaned[col].quantile(0.01)
-                q99 = cleaned[col].quantile(0.99)
-                cleaned[col] = cleaned[col].clip(lower=q1, upper=q99)
-    elif outlier_option != "None" and not SCIPY_AVAILABLE:
-        st.warning("Scipy not installed. Z‑score outlier detection disabled. Use 'Cap' option instead.")
-
-    # Encode categoricals
-    if encode_option != "None":
-        cat_cols = cleaned.select_dtypes(include=['object']).columns
-        if len(cat_cols) > 0:
-            if encode_option == "Label Encoding":
-                for col in cat_cols:
-                    le = LabelEncoder()
-                    cleaned[col] = le.fit_transform(cleaned[col].astype(str))
-            elif encode_option == "One-Hot Encoding":
-                cleaned = pd.get_dummies(cleaned, columns=cat_cols, drop_first=True)
-
-    # Scale numericals
-    if scale_option != "None":
-        num_cols = cleaned.select_dtypes(include=[np.number]).columns
-        if len(num_cols) > 0:
-            if scale_option == "Standardization (z-score)":
-                scaler = StandardScaler()
-                cleaned[num_cols] = scaler.fit_transform(cleaned[num_cols])
-            elif scale_option == "Normalization (min-max)":
-                scaler = MinMaxScaler()
-                cleaned[num_cols] = scaler.fit_transform(cleaned[num_cols])
-
-    if cols_to_drop:
-        cleaned = cleaned.drop(columns=cols_to_drop, errors='ignore')
-
-    return cleaned
-
-# ---------- PyCaret safe setup ----------
-def _pycaret_setup_safe(setup_fn, **kwargs):
-    """
-    Call PyCaret setup() with only supported kwargs.
-    PyCaret's setup() signature differs across versions; filtering prevents runtime TypeError.
-    """
-    import inspect
-    try:
-        params = set(inspect.signature(setup_fn).parameters.keys())
-    except Exception:
-        params = set()
-
-    if params:
-        filtered = {k: v for k, v in kwargs.items() if k in params}
-        return setup_fn(**filtered)
-
-    # Fallback: best-effort, then progressively drop unknown keys if needed.
-    try:
-        return setup_fn(**kwargs)
-    except TypeError as e:
-        msg = str(e)
-        if "unexpected keyword argument" in msg:
-            import re
-            m = re.search(r"unexpected keyword argument '([^']+)'", msg)
-            if m:
-                bad = m.group(1)
-                kwargs.pop(bad, None)
-                return _pycaret_setup_safe(setup_fn, **kwargs)
-        raise
-
-# ---------- Report generation ----------
-def generate_report_text(problem_type: str,
-                         metrics: dict,
-                         model,
-                         target_col: str,
-                         dataset_shape: Optional[Tuple[int, int]] = None) -> str:
-    """Generate a plain text report from metrics and model info."""
-    lines = []
-    lines.append("# Machine Learning Model Evaluation Report")
-    lines.append(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    lines.append(f"Problem Type: {problem_type}")
-    lines.append(f"Target Column: {target_col}")
-    if dataset_shape:
-        lines.append(f"Dataset Shape: {dataset_shape[0]} rows, {dataset_shape[1]} columns")
-    lines.append("")
-    lines.append("## Performance Summary")
-    for key, val in metrics.items():
-        lines.append(f"- {key}: {val:.4f}" if isinstance(val, float) else f"- {key}: {val}")
-    lines.append("")
-    lines.append("## Best Model")
-    lines.append(str(model))
-    return "\n".join(lines)
+def go_to(page):
+    st.session_state.page = page
 
 # ---------- Page configuration ----------
 st.set_page_config(
@@ -367,52 +241,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# ---------- Supabase client ----------
-if "supabase" not in st.session_state:
-    if SUPABASE_AVAILABLE:
-        try:
-            url = st.secrets["supabase"]["url"]
-            key = st.secrets["supabase"]["key"]
-            st.session_state.supabase = create_client(url, key)
-        except Exception as e:
-            st.error(f"Supabase connection failed: {e}")
-            st.session_state.supabase = None
-    else:
-        st.session_state.supabase = None
-
-# ---------- Session state initialisation ----------
-if "page" not in st.session_state:
-    st.session_state.page = "front"
-if "logged_in" not in st.session_state:
-    st.session_state.logged_in = False
-if "user_name" not in st.session_state:
-    st.session_state.user_name = ""
-if "data" not in st.session_state:
-    st.session_state.data = None
-if "target_column" not in st.session_state:
-    st.session_state.target_column = None
-if "problem_type" not in st.session_state:
-    st.session_state.problem_type = None
-if "model" not in st.session_state:
-    st.session_state.model = None
-if "predictions" not in st.session_state:
-    st.session_state.predictions = None
-if "test_data" not in st.session_state:
-    st.session_state.test_data = None
-if "training_complete" not in st.session_state:
-    st.session_state.training_complete = False
-if "app_page" not in st.session_state:
-    st.session_state.app_page = "📁 Data Upload"
-if "cleaned_data" not in st.session_state:
-    st.session_state.cleaned_data = None
-if "label_encoder" not in st.session_state:
-    st.session_state.label_encoder = None
-
-# ---------- Navigation helpers ----------
-def go_to(page: str):
-    st.session_state.page = page
-
-# ---------- Global CSS ----------
+# ---------- Global CSS styles ----------
 st.markdown("""
 <style>
     .main-header {
@@ -468,10 +297,145 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# ---------- Pages ----------
+# ---------- Session state initialisation ----------
+if "data" not in st.session_state:
+    st.session_state.data = None
+if "target_column" not in st.session_state:
+    st.session_state.target_column = None
+if "problem_type" not in st.session_state:
+    st.session_state.problem_type = None
+if "model" not in st.session_state:
+    st.session_state.model = None
+if "predictions" not in st.session_state:
+    st.session_state.predictions = None
+if "test_data" not in st.session_state:
+    st.session_state.test_data = None
+if "training_complete" not in st.session_state:
+    st.session_state.training_complete = False
+if "app_page" not in st.session_state:
+    st.session_state.app_page = "📁 Data Upload"
+if "cleaned_data" not in st.session_state:
+    st.session_state.cleaned_data = None
+if "label_encoder" not in st.session_state:
+    st.session_state.label_encoder = None
+
+# ---------- Helper function for cleaning ----------
+def apply_cleaning(df, drop_duplicates, missing_option, outlier_option, encode_option, scale_option, cols_to_drop):
+    cleaned = df.copy()
+
+    if drop_duplicates:
+        cleaned = cleaned.drop_duplicates()
+
+    if missing_option != "None":
+        if missing_option == "Drop rows with any missing":
+            cleaned = cleaned.dropna()
+        elif missing_option == "Drop columns with any missing":
+            cleaned = cleaned.dropna(axis=1)
+        elif missing_option == "Fill numeric with mean":
+            num_cols = cleaned.select_dtypes(include=[np.number]).columns
+            for col in num_cols:
+                cleaned[col] = cleaned[col].fillna(cleaned[col].mean())
+        elif missing_option == "Fill numeric with median":
+            num_cols = cleaned.select_dtypes(include=[np.number]).columns
+            for col in num_cols:
+                cleaned[col] = cleaned[col].fillna(cleaned[col].median())
+        elif missing_option == "Fill categorical with mode":
+            cat_cols = cleaned.select_dtypes(include=['object']).columns
+            for col in cat_cols:
+                cleaned[col] = cleaned[col].fillna(cleaned[col].mode()[0] if not cleaned[col].mode().empty else "Unknown")
+
+    if outlier_option != "None" and SCIPY_AVAILABLE:
+        num_cols = cleaned.select_dtypes(include=[np.number]).columns
+        if outlier_option == "Remove rows with Z-score > 3":
+            if len(num_cols) > 0:
+                numeric_subset = cleaned[num_cols].dropna()
+                if not numeric_subset.empty:
+                    z_scores = np.abs(stats.zscore(numeric_subset, nan_policy='omit'))
+                    if np.ndim(z_scores) == 1:
+                        z_scores = z_scores.reshape(-1, 1)
+                    outlier_rows = (z_scores > 3).any(axis=1)
+                    outlier_idx = numeric_subset.index[outlier_rows]
+                    cleaned = cleaned.drop(index=outlier_idx)
+        elif outlier_option == "Cap at 1st and 99th percentile":
+            for col in num_cols:
+                q1 = cleaned[col].quantile(0.01)
+                q99 = cleaned[col].quantile(0.99)
+                cleaned[col] = cleaned[col].clip(lower=q1, upper=q99)
+    elif outlier_option != "None" and not SCIPY_AVAILABLE:
+        st.warning("Scipy not installed. Z‑score outlier detection disabled. Use 'Cap' option instead.")
+
+    if encode_option != "None":
+        cat_cols = cleaned.select_dtypes(include=['object']).columns
+        if len(cat_cols) > 0:
+            if encode_option == "Label Encoding":
+                for col in cat_cols:
+                    le = LabelEncoder()
+                    cleaned[col] = le.fit_transform(cleaned[col].astype(str))
+            elif encode_option == "One-Hot Encoding":
+                cleaned = pd.get_dummies(cleaned, columns=cat_cols, drop_first=True)
+
+    if scale_option != "None":
+        num_cols = cleaned.select_dtypes(include=[np.number]).columns
+        if len(num_cols) > 0:
+            if scale_option == "Standardization (z-score)":
+                scaler = StandardScaler()
+                cleaned[num_cols] = scaler.fit_transform(cleaned[num_cols])
+            elif scale_option == "Normalization (min-max)":
+                scaler = MinMaxScaler()
+                cleaned[num_cols] = scaler.fit_transform(cleaned[num_cols])
+
+    if cols_to_drop:
+        cleaned = cleaned.drop(columns=cols_to_drop, errors='ignore')
+
+    return cleaned
+
+# ---------- PyCaret safe setup ----------
+def _pycaret_setup_safe(setup_fn, **kwargs):
+    import inspect
+    try:
+        params = set(inspect.signature(setup_fn).parameters.keys())
+    except Exception:
+        params = set()
+
+    if params:
+        filtered = {k: v for k, v in kwargs.items() if k in params}
+        return setup_fn(**filtered)
+
+    try:
+        return setup_fn(**kwargs)
+    except TypeError as e:
+        msg = str(e)
+        if "unexpected keyword argument" in msg:
+            import re
+            m = re.search(r"unexpected keyword argument '([^']+)'", msg)
+            if m:
+                bad = m.group(1)
+                kwargs.pop(bad, None)
+                return _pycaret_setup_safe(setup_fn, **kwargs)
+        raise
+
+# ---------- Report generation ----------
+def generate_report_text(problem_type, metrics, model, target_col, dataset_shape=None):
+    lines = []
+    lines.append("# Machine Learning Model Evaluation Report")
+    lines.append(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    lines.append(f"Problem Type: {problem_type}")
+    lines.append(f"Target Column: {target_col}")
+    if dataset_shape:
+        lines.append(f"Dataset Shape: {dataset_shape}")
+    lines.append("")
+    lines.append("## Performance Summary")
+    for key, val in metrics.items():
+        lines.append(f"- {key}: {val:.4f}" if isinstance(val, float) else f"- {key}: {val}")
+    lines.append("")
+    lines.append("## Best Model")
+    lines.append(str(model))
+    return "\n".join(lines)
+
+# ---------- Dashboard subpages ----------
 def front_page():
     set_bg_image_local("FrontPage.jpg")
-    # Force white text
+    # Force all text on the front page to be white
     st.markdown("""
     <style>
         .stApp {
@@ -645,6 +609,7 @@ def login_page():
         st.markdown('</div>', unsafe_allow_html=True)
         st.markdown('</div>', unsafe_allow_html=True)
 
+# ---------- Upload page ----------
 def upload_page():
     st.markdown('<h2 class="sub-header">📁 Upload Your Dataset</h2>', unsafe_allow_html=True)
     col1, col2 = st.columns([2, 1])
@@ -738,7 +703,7 @@ def cleaning_page():
         missing_option = st.selectbox(
             "Handle missing values",
             ["None", "Drop rows with any missing", "Drop columns with any missing",
-             "Fill numeric with mean", "Fill numeric with median", "Fill categorical with mode"]
+                "Fill numeric with mean", "Fill numeric with median", "Fill categorical with mode"]
         )
         outlier_option = st.selectbox(
             "Handle outliers (numerical columns)",
@@ -928,6 +893,8 @@ def training_page():
     </div>
     """, unsafe_allow_html=True)
 
+    if "train_time" not in st.session_state:
+        st.session_state.train_time = 10
     if "training_mode" not in st.session_state:
         st.session_state.training_mode = "Balanced"
 
@@ -1016,7 +983,6 @@ def training_page():
                         sort='R2'
                     )
 
-                # Retrieve test data
                 try:
                     X_test = get_config('X_test')
                     y_test = get_config('y_test')
@@ -1024,7 +990,6 @@ def training_page():
                     st.error(f"Failed to retrieve test data: {e}")
                     return
 
-                # Predict on test set
                 if problem_type == "Classification":
                     pred_df = clf_predict(best_model, data=X_test)
                 else:
@@ -1176,7 +1141,6 @@ def evaluation_page():
             except Exception as e:
                 st.error(f"Failed to generate confusion matrix: {e}")
 
-            # ROC and PR curves (binary only)
             if hasattr(model, 'predict_proba') and len(np.unique(y_test_str)) == 2:
                 try:
                     if hasattr(model, 'classes_'):
@@ -1194,19 +1158,18 @@ def evaluation_page():
                     fig_roc.add_trace(go.Scatter(x=fpr, y=tpr, mode='lines', name=f'ROC (AUC={roc_auc:.3f})'))
                     fig_roc.add_trace(go.Scatter(x=[0,1], y=[0,1], mode='lines', name='Random', line=dict(dash='dash')))
                     fig_roc.update_layout(xaxis_title='False Positive Rate', yaxis_title='True Positive Rate',
-                                          title='ROC Curve')
+                                            title='ROC Curve')
                     st.plotly_chart(fig_roc, use_container_width=True)
 
                     precisions, recalls, _ = precision_recall_curve(y_test_num, y_proba)
                     fig_pr = go.Figure()
                     fig_pr.add_trace(go.Scatter(x=recalls, y=precisions, mode='lines', name='PR Curve'))
                     fig_pr.update_layout(xaxis_title='Recall', yaxis_title='Precision',
-                                         title='Precision-Recall Curve')
+                                            title='Precision-Recall Curve')
                     st.plotly_chart(fig_pr, use_container_width=True)
                 except Exception as e:
                     st.info(f"Could not compute ROC/PR curves: {e}")
 
-            # Decision threshold tuning
             if hasattr(model, 'predict_proba') and len(np.unique(y_test_str)) == 2:
                 st.markdown("### ⚙️ Decision Threshold Tuning & Cost Simulation")
                 st.write("Adjust the classification threshold to optimize for your business needs.")
@@ -1311,12 +1274,12 @@ def evaluation_page():
             st.markdown("### 📈 Actual vs Predicted")
             try:
                 fig = px.scatter(x=y_test, y=predictions, labels={'x': 'Actual', 'y': 'Predicted'},
-                                 title='Actual vs Predicted Values')
+                                    title='Actual vs Predicted Values')
                 max_val = max(max(y_test), max(predictions))
                 min_val = min(min(y_test), min(predictions))
                 fig.add_trace(go.Scatter(x=[min_val, max_val], y=[min_val, max_val],
-                                         mode='lines', name='Perfect Prediction',
-                                         line=dict(color='red', dash='dash')))
+                                            mode='lines', name='Perfect Prediction',
+                                            line=dict(color='red', dash='dash')))
                 st.plotly_chart(fig, use_container_width=True)
             except Exception as e:
                 st.error(f"Failed to generate actual vs predicted plot: {e}")
@@ -1325,7 +1288,7 @@ def evaluation_page():
             try:
                 residuals = y_test - predictions
                 fig = px.scatter(x=predictions, y=residuals, labels={'x': 'Predicted', 'y': 'Residuals'},
-                                 title='Residual Plot')
+                                    title='Residual Plot')
                 fig.add_hline(y=0, line_dash="dash", line_color="red")
                 st.plotly_chart(fig, use_container_width=True)
 
@@ -1482,6 +1445,7 @@ This model was generated using PyCaret AutoML through the No-Code ML Platform.
             st.session_state.app_page = "📁 Data Upload"
             st.rerun()
 
+# ---------- Dashboard ----------
 def dashboard_page():
     set_bg_image_local("purple.jpg")
 
