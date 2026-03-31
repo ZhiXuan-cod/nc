@@ -1,3 +1,9 @@
+"""
+No-Code ML Platform
+Complete Streamlit application with Supabase authentication,
+data cleaning, EDA, PyCaret AutoML, and evaluation.
+"""
+
 import streamlit as st
 import os
 import base64
