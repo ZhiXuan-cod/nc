@@ -24,27 +24,22 @@ warnings.filterwarnings('ignore')
 # ---------- Supabase import ----------
 from supabase import create_client
 
-# ---------- Optional imports with fallback flags ----------
+# ---------- PyCaret imports ----------
 try:
     from pycaret.classification import setup as clf_setup, compare_models as clf_compare, predict_model as clf_predict, get_config, pull, save_model as pycaret_save_model
     from pycaret.regression import setup as reg_setup, compare_models as reg_compare, predict_model as reg_predict
     PYCARET_AVAILABLE = True
 except ImportError:
     PYCARET_AVAILABLE = False
+    st.warning("⚠️ PyCaret not installed. Install with 'pip install pycaret' to use AutoML.")
 
+# ---------- Scipy for outlier detection ----------
 try:
     import scipy.stats as stats
     SCIPY_AVAILABLE = True
 except ImportError:
     SCIPY_AVAILABLE = False
-
-# ---------- Page configuration (must be the first Streamlit command) ----------
-st.set_page_config(
-    page_title="No-Code ML Platform",
-    page_icon="💻",
-    layout="centered",
-    initial_sidebar_state="collapsed"
-)
+    st.warning("Scipy not installed. Outlier detection (Z‑score) will be disabled. Install with `pip install scipy`.")
 
 # ---------- Minimal PDF generator ----------
 def _pdf_escape(text: str) -> str:
@@ -189,7 +184,7 @@ def verify_password(plain_password: str, stored_password: str) -> bool:
     # Legacy plain-text fallback
     return stored_password == plain_password
 
-# ---------- Supabase client ----------
+# ---------- Supabase client (exactly as in your example code) ----------
 if "supabase" not in st.session_state:
     try:
         url = st.secrets["supabase"]["url"]
@@ -237,6 +232,14 @@ if "user_name" not in st.session_state:
 
 def go_to(page):
     st.session_state.page = page
+
+# ---------- Page configuration ----------
+st.set_page_config(
+    page_title="No-Code ML Platform",
+    page_icon="💻",
+    layout="centered",
+    initial_sidebar_state="collapsed"
+)
 
 # ---------- Global CSS styles ----------
 st.markdown("""
@@ -606,6 +609,7 @@ def login_page():
         st.markdown('</div>', unsafe_allow_html=True)
         st.markdown('</div>', unsafe_allow_html=True)
 
+# ---------- Upload page ----------
 def upload_page():
     st.markdown('<h2 class="sub-header">📁 Upload Your Dataset</h2>', unsafe_allow_html=True)
     col1, col2 = st.columns([2, 1])
@@ -1493,8 +1497,6 @@ def dashboard_page():
         if not PYCARET_AVAILABLE:
             st.error("⚠️ PyCaret not installed. Install with: `pip install pycaret`")
             st.code("pip install pycaret", language="bash")
-        if not SCIPY_AVAILABLE:
-            st.warning("⚠️ Scipy not installed. Outlier detection (Z‑score) will be disabled. Install with `pip install scipy`.")
 
         if st.button("👋🏻 Logout", type="primary"):
             st.session_state.logged_in = False
