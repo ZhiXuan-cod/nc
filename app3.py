@@ -332,7 +332,10 @@ def apply_cleaning(df, drop_duplicates, missing_option, outlier_option,
         if missing_option == "Drop rows with any missing":
             cleaned = cleaned.dropna()
         elif missing_option == "Drop columns with any missing":
-            cleaned = cleaned.dropna(axis=1)
+            # FIX: Only drop columns that have missing values AND are not the target column
+            cols_with_na = cleaned.columns[cleaned.isnull().any()].tolist()
+            cols_to_drop_na = [c for c in cols_with_na if c != target_col]
+            cleaned = cleaned.drop(columns=cols_to_drop_na, errors='ignore')
         elif missing_option == "Fill numeric with mean":
             num_cols = cleaned.select_dtypes(include=[np.number]).columns
             # Exclude target column if it is numeric
@@ -901,6 +904,10 @@ def training_page():
     problem_type = st.session_state.problem_type
 
     # ---------- Data validation ----------
+    if target_col not in df.columns:
+        st.error(f"❌ Target column '{target_col}' is not in the dataset. Current columns: {df.columns.tolist()}")
+        return
+
     if df[target_col].isnull().sum() > 0:
         st.error(f"Target column '{target_col}' contains missing values. Please handle them in Data Cleaning.")
         return
@@ -928,7 +935,12 @@ def training_page():
     for col in numeric_cols:
         if np.isinf(df[col]).any():
             st.warning(f"Feature column '{col}' contains infinite values. They may cause training errors. Consider cleaning them.")
-    # ---------- End validation ----------
+
+    # Optional: display current columns for debugging (can be removed later)
+    with st.expander("Debug: Current Columns"):
+        st.write("DataFrame columns:", df.columns.tolist())
+        st.write("Target column:", target_col)
+        st.write("Data shape:", df.shape)
 
     if problem_type == "Classification" and df[target_col].nunique() > 20:
         st.warning(f"Target column has {df[target_col].nunique()} unique values. Classification may be slow or have low accuracy. Consider regression or reduce categories.")
@@ -1146,9 +1158,59 @@ def evaluation_page():
             except Exception as e:
                 st.warning(f"Feature importance display failed: {e}")
 
-        # ... rest of evaluation_page remains unchanged ...
-        # (The rest of the function is identical to the original, so omitted for brevity)
-        # You can keep the rest of the evaluation_page as it was, but ensure any references to X_test.columns are handled safely.
+        # Continue with evaluation metrics
+        if problem_type == "Classification":
+            st.markdown("### Classification Metrics")
+            # Ensure classification labels are strings for metrics
+            y_test_str = y_test.astype(str)
+            pred_str = predictions.astype(str)
+
+            col1, col2 = st.columns(2)
+            with col1:
+                st.metric("Accuracy", f"{accuracy_score(y_test_str, pred_str):.4f}")
+                st.metric("Precision", f"{precision_score(y_test_str, pred_str, average='weighted'):.4f}")
+                st.metric("Recall", f"{recall_score(y_test_str, pred_str, average='weighted'):.4f}")
+            with col2:
+                st.metric("F1 Score", f"{f1_score(y_test_str, pred_str, average='weighted'):.4f}")
+
+            # Confusion matrix
+            cm = confusion_matrix(y_test_str, pred_str)
+            fig = px.imshow(cm, text_auto=True, aspect="auto",
+                            labels=dict(x="Predicted", y="Actual", color="Count"),
+                            title="Confusion Matrix")
+            st.plotly_chart(fig, use_container_width=True)
+
+            # Classification report
+            report = classification_report(y_test_str, pred_str, output_dict=True)
+            report_df = pd.DataFrame(report).transpose()
+            st.dataframe(report_df, use_container_width=True)
+
+        else:  # Regression
+            st.markdown("### Regression Metrics")
+            col1, col2 = st.columns(2)
+            with col1:
+                st.metric("R² Score", f"{r2_score(y_test, predictions):.4f}")
+                st.metric("MAE", f"{mean_absolute_error(y_test, predictions):.4f}")
+            with col2:
+                st.metric("RMSE", f"{np.sqrt(mean_squared_error(y_test, predictions)):.4f}")
+                st.metric("MAPE (%)", f"{np.mean(np.abs((y_test - predictions) / y_test)) * 100:.2f}")
+
+            # Residuals plot
+            residuals = y_test - predictions
+            fig = px.scatter(x=predictions, y=residuals,
+                             labels={'x': 'Predicted Values', 'y': 'Residuals'},
+                             title="Residuals vs Predicted")
+            fig.add_hline(y=0, line_dash="dash", line_color="red")
+            st.plotly_chart(fig, use_container_width=True)
+
+            # Actual vs Predicted
+            fig = px.scatter(x=y_test, y=predictions,
+                             labels={'x': 'Actual', 'y': 'Predicted'},
+                             title="Actual vs Predicted")
+            fig.add_trace(go.Scatter(x=[y_test.min(), y_test.max()],
+                                     y=[y_test.min(), y_test.max()],
+                                     mode='lines', name='Ideal', line=dict(dash='dash', color='red')))
+            st.plotly_chart(fig, use_container_width=True)
 
     except Exception as e:
         st.error(f"Unknown error occurred during evaluation: {str(e)}")
