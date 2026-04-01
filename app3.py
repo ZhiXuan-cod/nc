@@ -398,8 +398,9 @@ def apply_cleaning(df, drop_duplicates, missing_option, outlier_option,
 
     return cleaned
 
-# ---------- PyCaret safe setup ----------
+# ---------- Safe PyCaret Setup (handles unexpected keyword arguments) ----------
 def _pycaret_setup_safe(setup_fn, **kwargs):
+    """PyCaret setup that removes unexpected keyword arguments."""
     import inspect
     try:
         params = set(inspect.signature(setup_fn).parameters.keys())
@@ -410,6 +411,7 @@ def _pycaret_setup_safe(setup_fn, **kwargs):
         filtered = {k: v for k, v in kwargs.items() if k in params}
         return setup_fn(**filtered)
 
+    # Fallback: try-catch with recursion to remove offending args
     try:
         return setup_fn(**kwargs)
     except TypeError as e:
@@ -855,12 +857,12 @@ def eda_page():
         else:
             st.button("➡️ Go to Model Training (set target first)", disabled=True, use_container_width=True)
 
-# ---------- Training page ----------
+# ---------- Training page (updated) ----------
 def training_page():
     st.markdown('<h2 class="sub-header">📐 Automated Model Training with PyCaret</h2>', unsafe_allow_html=True)
 
     if not PYCARET_AVAILABLE:
-        st.error("⚠️ PyCaret is not installed. Please install it with `pip install pycaret` to use AutoML.")
+        st.error("⚠️ PyCaret not installed. Install with `pip install pycaret` to use AutoML.")
         if st.button("Go to Data Upload"):
             st.session_state.app_page = "📁 Data Upload"
             st.rerun()
@@ -886,21 +888,8 @@ def training_page():
         st.error(f"Target column '{target_col}' contains missing values. Please handle them in Data Cleaning.")
         return
 
-    if problem_type == "Classification":
-        # Do NOT convert target to string; let PyCaret handle encoding
-        if df[target_col].dtype in ['float64', 'int64']:
-            unique_vals = df[target_col].nunique()
-            if unique_vals > 20:
-                st.warning(f"Target column '{target_col}' has {unique_vals} unique numeric values. "
-                           "If this is a classification problem with many categories, training may be slow or inaccurate. "
-                           "Consider converting to categorical or using regression.")
-    elif problem_type == "Regression":
-        if not pd.api.types.is_numeric_dtype(df[target_col]):
-            st.error(f"Target column '{target_col}' is not numeric. Regression requires a numeric target.")
-            return
-
     # Check for infinite values
-    if problem_type == "Regression" and np.isinf(df[target_col]).any():
+    if np.isinf(df[target_col]).any():
         st.error("Target column contains infinite values. Please remove or replace them.")
         return
 
@@ -1066,7 +1055,7 @@ def training_page():
                 st.error(f"❌ Training failed: {type(e).__name__}: {str(e)}")
                 print(f"Training error: {type(e).__name__}: {e}")
 
-# ---------- Evaluation page ----------
+# ---------- Evaluation page (updated) ----------
 def evaluation_page():
     st.markdown('<h2 class="sub-header">📈 Model Performance Evaluation</h2>', unsafe_allow_html=True)
 
