@@ -369,7 +369,7 @@ def apply_cleaning(df, drop_duplicates, missing_option, outlier_option,
     elif outlier_option != "None" and not SCIPY_AVAILABLE:
         st.warning("Scipy not installed. Z‑score outlier detection disabled. Use 'Cap' option instead.")
 
-    # Categorical encoding (skip target) - 清洗页面强制传入 "None"，所以此部分不会执行
+    # Categorical encoding (skip target) - cleaning page forces "None"
     if encode_option != "None":
         cat_cols = cleaned.select_dtypes(include=['object']).columns
         cat_cols = [c for c in cat_cols if c != target_col]
@@ -381,7 +381,7 @@ def apply_cleaning(df, drop_duplicates, missing_option, outlier_option,
             elif encode_option == "One-Hot Encoding":
                 cleaned = pd.get_dummies(cleaned, columns=cat_cols, drop_first=True)
 
-    # Feature scaling (skip target) - 清洗页面强制传入 "None"，不会执行
+    # Feature scaling (skip target) - cleaning page forces "None"
     if scale_option != "None":
         num_cols = cleaned.select_dtypes(include=[np.number]).columns
         num_cols = [c for c in num_cols if c != target_col]
@@ -676,13 +676,13 @@ def upload_page():
         else:
             st.button("➡️ Go to Data Cleaning (set target first)", disabled=True, use_container_width=True)
 
-# ---------- Cleaning page (基础清洗，无编码/缩放) ----------
+# ---------- Cleaning page (basic cleaning, no encoding/scaling) ----------
 def cleaning_page():
-    st.markdown('<h2 class="sub-header">🧹 基础数据清洗</h2>', unsafe_allow_html=True)
+    st.markdown('<h2 class="sub-header">🧹 Basic Data Cleaning</h2>', unsafe_allow_html=True)
 
     if st.session_state.data is None:
-        st.warning("⚠️ 请先在「数据上传」页面上传数据。")
-        if st.button("前往数据上传"):
+        st.warning("⚠️ Please upload data first on the 'Data Upload' page.")
+        if st.button("Go to Data Upload"):
             st.session_state.app_page = "📁 Data Upload"
             st.rerun()
         return
@@ -690,49 +690,48 @@ def cleaning_page():
     original_df = st.session_state.data
     target_col = st.session_state.target_column
 
-    st.markdown("### 原始数据预览")
+    st.markdown("### Original Data Preview")
     st.dataframe(original_df.head())
-    st.markdown(f"形状：{original_df.shape}")
+    st.markdown(f"Shape: {original_df.shape}")
 
-    st.info("📌 PyCaret 会自动完成编码和特征缩放，因此此处仅进行基础清洗（去重、缺失值、列删除、简单异常值处理）。")
-
-    with st.expander("基础清洗选项", expanded=True):
-        drop_duplicates = st.checkbox("删除重复行")
+    with st.expander("Basic Cleaning Options", expanded=True):
+        drop_duplicates = st.checkbox("Drop duplicate rows")
         missing_option = st.selectbox(
-            "缺失值处理",
-            ["None", "删除含缺失的行", "删除含缺失的列", "数值列填充均值", "数值列填充中位数", "类别列填充众数"]
+            "Handle missing values",
+            ["None", "Drop rows with any missing", "Drop columns with any missing",
+             "Fill numeric with mean", "Fill numeric with median", "Fill categorical with mode"]
         )
         outlier_option = st.selectbox(
-            "异常值处理（数值列）",
-            ["None", "删除 Z-score > 3 的行", "截尾（1%和99%分位数）"]
+            "Handle outliers (numerical columns)",
+            ["None", "Remove rows with Z-score > 3", "Cap at 1st and 99th percentile"]
         )
-        cols_to_drop = st.multiselect("选择要删除的列",
+        cols_to_drop = st.multiselect("Select columns to drop",
                                       [c for c in original_df.columns if c != target_col])
 
-        if st.button("🔍 预览清洗结果", type="secondary"):
+        if st.button("🔍 Preview Cleaning", type="secondary"):
             cleaned = apply_cleaning(original_df, drop_duplicates, missing_option, outlier_option,
                                      encode_option="None", scale_option="None",
                                      cols_to_drop=cols_to_drop, target_col=target_col)
-            st.markdown("### 清洗后数据预览")
+            st.markdown("### Cleaned Data Preview")
             st.dataframe(cleaned.head())
-            st.markdown(f"最终形状：{cleaned.shape}")
+            st.markdown(f"Final shape: {cleaned.shape}")
             st.session_state.cleaned_data = cleaned
 
     st.markdown("---")
     _, col2, _ = st.columns([1, 2, 1])
     with col2:
         if st.session_state.cleaned_data is not None:
-            if st.button("✅ 应用清洗并继续", type="primary", use_container_width=True):
+            if st.button("✅ Apply Cleaning & Continue", type="primary", use_container_width=True):
                 cleaned = apply_cleaning(original_df, drop_duplicates, missing_option, outlier_option,
                                          encode_option="None", scale_option="None",
                                          cols_to_drop=cols_to_drop, target_col=target_col)
                 st.session_state.data = cleaned
                 st.session_state.cleaned_data = None
-                st.success("数据清洗完成！")
+                st.success("Data cleaned successfully!")
                 st.session_state.app_page = "🔍 Exploratory Data Analysis"
                 st.rerun()
         else:
-            st.button("✅ 应用清洗（请先预览）", disabled=True, use_container_width=True)
+            st.button("✅ Apply Cleaning (preview first)", disabled=True, use_container_width=True)
 
 # ---------- EDA page ----------
 def eda_page():
@@ -850,20 +849,20 @@ def eda_page():
         else:
             st.button("➡️ Go to Model Training (set target first)", disabled=True, use_container_width=True)
 
-# ---------- Training page (PyCaret 全权处理预处理和划分) ----------
+# ---------- Training page (PyCaret handles preprocessing and split) ----------
 def training_page():
-    st.markdown('<h2 class="sub-header">📐 自动化模型训练（PyCaret）</h2>', unsafe_allow_html=True)
+    st.markdown('<h2 class="sub-header">📐 Automated Model Training (PyCaret)</h2>', unsafe_allow_html=True)
 
     if not PYCARET_AVAILABLE:
-        st.error("⚠️ PyCaret 未安装，请运行 `pip install pycaret` 后使用。")
-        if st.button("前往数据上传"):
+        st.error("⚠️ PyCaret not installed. Install with `pip install pycaret` to use AutoML.")
+        if st.button("Go to Data Upload"):
             st.session_state.app_page = "📁 Data Upload"
             st.rerun()
         return
 
     if st.session_state.data is None or st.session_state.target_column is None:
-        st.warning("⚠️ 请先上传数据并设定目标列。")
-        if st.button("前往数据上传"):
+        st.warning("⚠️ Please upload data and set target column first.")
+        if st.button("Go to Data Upload"):
             st.session_state.app_page = "📁 Data Upload"
             st.rerun()
         return
@@ -874,36 +873,35 @@ def training_page():
 
     # ---------- Data validation ----------
     if target_col not in df.columns:
-        st.error(f"❌ 目标列 '{target_col}' 不在数据集中。")
+        st.error(f"❌ Target column '{target_col}' is not in the dataset.")
         return
 
     if df[target_col].isnull().sum() > 0:
-        st.error(f"目标列 '{target_col}' 含有缺失值，请先在清洗页面处理。")
+        st.error(f"Target column '{target_col}' contains missing values. Please handle them in Data Cleaning.")
         return
 
-    # Check for infinite values (only for regression and numeric target)
     if problem_type == "Regression" and np.isinf(df[target_col]).any():
-        st.error("目标列包含无穷值，请先处理。")
+        st.error("Target column contains infinite values. Please remove or replace them.")
         return
 
     numeric_cols = df.select_dtypes(include=[np.number]).columns
     for col in numeric_cols:
         if np.isinf(df[col]).any():
-            st.warning(f"特征列 '{col}' 包含无穷值，可能导致训练错误。建议在清洗页面处理。")
+            st.warning(f"Feature column '{col}' contains infinite values. They may cause training errors. Consider cleaning them.")
 
     if problem_type == "Classification" and df[target_col].nunique() > 20:
-        st.warning(f"目标列有 {df[target_col].nunique()} 个唯一值，分类可能较慢或精度低。可考虑使用回归。")
+        st.warning(f"Target column has {df[target_col].nunique()} unique values. Classification may be slow or have low accuracy. Consider regression or reduce categories.")
 
     if len(df) < 20:
-        st.warning("⚠️ 数据集行数少于20，模型可能无法良好泛化。")
+        st.warning("⚠️ Dataset has very few rows (<20). Model may not generalize well.")
 
     st.markdown(f"""
     <div class="card">
-    <h4>训练配置</h4>
+    <h4>Training Configuration</h4>
     <ul>
-        <li><strong>问题类型：</strong> {problem_type}</li>
-        <li><strong>目标列：</strong> {target_col}</li>
-        <li><strong>数据集形状：</strong> {df.shape}</li>
+        <li><strong>Problem Type:</strong> {problem_type}</li>
+        <li><strong>Target Column:</strong> {target_col}</li>
+        <li><strong>Dataset Shape:</strong> {df.shape}</li>
     </ul>
     </div>
     """, unsafe_allow_html=True)
@@ -915,10 +913,10 @@ def training_page():
     col_mode, _ = st.columns([1, 2])
     with col_mode:
         mode = st.selectbox(
-            "训练模式",
+            "Training Mode",
             ["Fast", "Balanced", "Accurate"],
             index=["Fast", "Balanced", "Accurate"].index(st.session_state.training_mode),
-            help="Fast：仅轻量模型；Balanced：混合模型；Accurate：更多模型和更深入调优"
+            help="Fast: lightweight models only; Balanced: mix of models; Accurate: more models & deeper tuning"
         )
     if mode != st.session_state.training_mode:
         st.session_state.training_mode = mode
@@ -942,37 +940,36 @@ def training_page():
     # ---------- User parameters ----------
     col1, col2, col3 = st.columns(3)
     with col1:
-        test_size = st.slider("测试集比例 (%)", 10, 40, 20) / 100
+        test_size = st.slider("Test Size (%)", 10, 40, 20) / 100
     with col2:
-        fold = st.slider("交叉验证折数", 3, 10, 5)
+        fold = st.slider("Cross-validation folds", 3, 10, 5)
     with col3:
-        random_state = st.number_input("随机种子", 0, 100, 42)
+        random_state = st.number_input("Random State", 0, 100, 42)
 
-    sample_frac = st.slider("采样比例（可选，提高速度）", 0.1, 1.0, 1.0, 0.05)
+    sample_frac = st.slider("Sample fraction (optional, for speed)", 0.1, 1.0, 1.0, 0.05)
     if sample_frac < 1.0:
         df = df.sample(frac=sample_frac, random_state=random_state).reset_index(drop=True)
-        st.info(f"使用 {len(df)} 行数据（原始：{st.session_state.data.shape[0]} 行）。")
+        st.info(f"Using {len(df)} rows after sampling (original: {st.session_state.data.shape[0]} rows).")
 
-    if st.button("🚀 开始自动化训练", type="primary", use_container_width=True):
-        with st.spinner(f"🧠 PyCaret 正在训练 {len(allowed_models)} 个模型，{fold} 折交叉验证..."):
+    if st.button("🚀 Start Automated Training", type="primary", use_container_width=True):
+        with st.spinner(f"🧠 PyCaret is training {len(allowed_models)} models with {fold}-fold CV..."):
             try:
-                # ---------- 使用 PyCaret 内部划分，不手动分割 ----------
+                # ---------- Use PyCaret internal split, no manual split ----------
                 if problem_type == "Classification":
                     _pycaret_setup_safe(
                         clf_setup,
-                        data=df,                        # 整个数据集
+                        data=df,
                         target=target_col,
-                        train_size=1 - test_size,       # 内部划分训练/测试集
+                        train_size=1 - test_size,
                         session_id=random_state,
                         fold=fold,
                         n_jobs=1,
                         html=False,
                         verbose=False,
-                        preprocess=True,                # 启用自动预处理
+                        preprocess=True,
                         ignore_low_variance=False,
                         remove_multicollinearity=False,
                         log_experiment=False,
-                        # 分类任务启用分层采样（如果目标是类别）
                         stratify=True if problem_type == "Classification" and df[target_col].dtype == 'object' else None
                     )
                 else:
@@ -992,15 +989,15 @@ def training_page():
                         log_experiment=False
                     )
 
-                # 验证 setup 是否成功
+                # Verify setup succeeded
                 try:
                     _ = get_config('X_train')
                 except Exception as e:
-                    st.error("❌ PyCaret 初始化失败，请检查数据格式或目标列。")
+                    st.error("❌ PyCaret setup failed. Check data format or target column.")
                     st.exception(e)
                     return
 
-                # 比较模型
+                # Compare models
                 if problem_type == "Classification":
                     best_model = clf_compare(
                         include=allowed_models,
@@ -1016,27 +1013,27 @@ def training_page():
                         sort='R2'
                     )
 
-                # 在 PyCaret 内部测试集上预测（不传 data）
+                # Predict on PyCaret's internal test set
                 if problem_type == "Classification":
                     pred_df = clf_predict(best_model)
                 else:
                     pred_df = reg_predict(best_model)
 
-                # 提取预测值和真实标签（pred_df 包含原始数据和预测列）
-                test_predictions = pred_df.iloc[:, -1]          # 预测列通常是最后一列
-                y_test = pred_df[target_col]                    # 真实标签
+                # Extract predictions and true labels
+                test_predictions = pred_df.iloc[:, -1]          # prediction column is usually the last one
+                y_test = pred_df[target_col]                    # true labels
 
-                # 保存结果
+                # Save results
                 st.session_state.predictions = test_predictions.values
                 st.session_state.test_labels = y_test.values
                 st.session_state.model = best_model
                 st.session_state.training_complete = True
 
-                with st.expander("📊 训练结果（点击展开）", expanded=True):
-                    st.markdown("#### 🏆 最佳模型")
+                with st.expander("📊 Training Results (click to expand)", expanded=True):
+                    st.markdown("#### 🏆 Best Model")
                     st.code(str(best_model), language='python')
                     if hasattr(best_model, 'feature_importances_'):
-                        st.markdown("#### 🔍 特征重要性（Top 10）")
+                        st.markdown("#### 🔍 Feature Importance (Top 10)")
                         X_train = get_config('X_train')
                         feature_names = X_train.columns.tolist()
                         importances = best_model.feature_importances_
@@ -1045,52 +1042,52 @@ def training_page():
                             imp_df = imp_df.sort_values('importance', ascending=False).head(10)
                             st.dataframe(imp_df, use_container_width=True)
                         else:
-                            st.warning(f"特征重要性数组长度 ({len(importances)}) 与特征名称长度 ({len(feature_names)}) 不匹配，无法显示特征重要性。")
+                            st.warning(f"Feature importance length ({len(importances)}) does not match feature names length ({len(feature_names)}). Skipping display.")
                     elif hasattr(best_model, 'coef_'):
-                        st.markdown("#### 🔍 模型系数")
+                        st.markdown("#### 🔍 Model Coefficients")
                         X_train = get_config('X_train')
                         feature_names = X_train.columns.tolist()
                         coef = best_model.coef_
                         if coef.ndim == 2:
-                            # 多分类：取平均绝对值
+                            # Multi-class: average absolute coefficients
                             imp_df = pd.DataFrame({'feature': feature_names, 'importance': np.abs(coef).mean(axis=0)})
                             imp_df = imp_df.sort_values('importance', ascending=False).head(10)
-                            st.markdown("平均绝对值系数（多分类）")
+                            st.markdown("Mean Absolute Coefficients (Multi-class)")
                         else:
                             imp_df = pd.DataFrame({'feature': feature_names, 'coefficient': coef})
                             imp_df = imp_df.sort_values('coefficient', ascending=False).head(10)
-                            st.markdown("模型系数（线性模型）")
+                            st.markdown("Coefficients (Linear Model)")
                         st.dataframe(imp_df, use_container_width=True)
                     else:
-                        st.info("该模型不支持特征重要性或系数显示。")
+                        st.info("This model does not support feature importance or coefficient display.")
 
                     comparison_df = pull()
                     if comparison_df is not None:
-                        st.markdown("#### 📊 模型对比（Top 10）")
+                        st.markdown("#### 📊 Model Comparison (Top 10)")
                         st.dataframe(comparison_df.head(10), use_container_width=True)
 
-                st.success("🎉 模型训练完成！")
+                st.success("🎉 Model training completed successfully!")
                 st.session_state.app_page = "📈 Model Evaluation"
                 st.rerun()
 
             except Exception as e:
-                st.error(f"❌ 训练失败：{type(e).__name__}: {str(e)}")
+                st.error(f"❌ Training failed: {type(e).__name__}: {str(e)}")
                 st.exception(e)
 
 # ---------- Evaluation page ----------
 def evaluation_page():
-    st.markdown('<h2 class="sub-header">📈 模型性能评估</h2>', unsafe_allow_html=True)
+    st.markdown('<h2 class="sub-header">📈 Model Performance Evaluation</h2>', unsafe_allow_html=True)
 
     if not st.session_state.training_complete or st.session_state.model is None:
-        st.warning("⚠️ 未找到已训练的模型，请先前往「模型训练」页面训练。")
-        if st.button("前往模型训练"):
+        st.warning("⚠️ No trained model found. Please go to 'Model Training' and train a model first.")
+        if st.button("Go to Model Training"):
             st.session_state.app_page = "📐 Model Training"
             st.rerun()
         return
 
     if st.session_state.predictions is None or st.session_state.test_labels is None:
-        st.error("❌ 预测结果或真实标签缺失，请重新训练模型。")
-        if st.button("重新训练"):
+        st.error("❌ Model predictions or test labels missing. Please retrain the model.")
+        if st.button("Retrain Model"):
             st.session_state.app_page = "📐 Model Training"
             st.rerun()
         return
@@ -1100,20 +1097,20 @@ def evaluation_page():
     y_test = st.session_state.test_labels
     problem_type = st.session_state.problem_type
 
-    # 确保是一维数组
+    # Ensure 1D arrays
     y_test = np.asarray(y_test).ravel()
     predictions = np.asarray(predictions).ravel()
 
     if pd.isnull(y_test).any() or pd.isnull(predictions).any():
-        st.error("测试数据或预测结果包含NaN，无法计算指标。")
+        st.error("Test data or predictions contain NaN values. Cannot compute metrics.")
         return
 
-    with st.expander("🔍 模型信息", expanded=False):
-        st.markdown("#### 最佳模型")
+    with st.expander("🔍 Model Information", expanded=False):
+        st.markdown("#### Best Model")
         st.code(str(model), language='python')
         try:
             if hasattr(model, 'feature_importances_'):
-                st.markdown("#### 特征重要性（全部）")
+                st.markdown("#### Feature Importance (All)")
                 X_train = get_config('X_train')
                 feat_names = X_train.columns.tolist()
                 importances = model.feature_importances_
@@ -1122,7 +1119,7 @@ def evaluation_page():
                     imp_df = imp_df.sort_values('importance', ascending=False)
                     st.dataframe(imp_df, use_container_width=True)
                 else:
-                    st.info("特征重要性数组长度与特征名不匹配，跳过显示。")
+                    st.info("Feature importance length mismatch. Skipping display.")
             elif hasattr(model, 'coef_'):
                 X_train = get_config('X_train')
                 feat_names = X_train.columns.tolist()
@@ -1130,18 +1127,18 @@ def evaluation_page():
                 if coef.ndim == 2:
                     imp_df = pd.DataFrame({'feature': feat_names, 'importance': np.abs(coef).mean(axis=0)})
                     imp_df = imp_df.sort_values('importance', ascending=False)
-                    st.markdown("#### 平均绝对值系数（多分类）")
+                    st.markdown("#### Mean Absolute Coefficients (Multi-class)")
                 else:
                     imp_df = pd.DataFrame({'feature': feat_names, 'coefficient': coef})
                     imp_df = imp_df.sort_values('coefficient', ascending=False)
                 st.dataframe(imp_df, use_container_width=True)
             else:
-                st.info("该模型不支持特征重要性显示。")
+                st.info("This model does not support feature importance display.")
         except Exception as e:
-            st.warning(f"特征重要性显示失败：{e}")
+            st.warning(f"Feature importance display failed: {e}")
 
     if problem_type == "Classification":
-        st.markdown("### 分类指标")
+        st.markdown("### Classification Metrics")
 
         try:
             acc = accuracy_score(y_test, predictions)
@@ -1149,40 +1146,40 @@ def evaluation_page():
             rec = recall_score(y_test, predictions, average='weighted', zero_division=0)
             f1 = f1_score(y_test, predictions, average='weighted', zero_division=0)
         except Exception as e:
-            st.error(f"计算分类指标出错：{e}")
+            st.error(f"Error computing classification metrics: {e}")
             return
 
         col1, col2 = st.columns(2)
         with col1:
-            st.metric("准确率", f"{acc:.4f}")
-            st.metric("精确率 (weighted)", f"{prec:.4f}")
+            st.metric("Accuracy", f"{acc:.4f}")
+            st.metric("Precision (weighted)", f"{prec:.4f}")
         with col2:
-            st.metric("召回率 (weighted)", f"{rec:.4f}")
-            st.metric("F1分数 (weighted)", f"{f1:.4f}")
+            st.metric("Recall (weighted)", f"{rec:.4f}")
+            st.metric("F1 Score (weighted)", f"{f1:.4f}")
 
-        # 混淆矩阵
+        # Confusion matrix
         try:
             cm = confusion_matrix(y_test, predictions)
             fig = px.imshow(cm, text_auto=True, aspect="auto",
-                            labels=dict(x="预测", y="实际", color="数量"),
-                            title="混淆矩阵")
+                            labels=dict(x="Predicted", y="Actual", color="Count"),
+                            title="Confusion Matrix")
             st.plotly_chart(fig, use_container_width=True)
         except Exception as e:
-            st.error(f"生成混淆矩阵失败：{e}")
+            st.error(f"Could not generate confusion matrix: {e}")
 
-        # 分类报告
+        # Classification report
         try:
             report = classification_report(y_test, predictions, output_dict=True, zero_division=0)
             report_df = pd.DataFrame(report).transpose()
             st.dataframe(report_df, use_container_width=True)
         except Exception as e:
-            st.error(f"生成分类报告失败：{e}")
+            st.error(f"Could not generate classification report: {e}")
 
     else:  # Regression
-        st.markdown("### 回归指标")
+        st.markdown("### Regression Metrics")
         col1, col2 = st.columns(2)
         with col1:
-            st.metric("R² 分数", f"{r2_score(y_test, predictions):.4f}")
+            st.metric("R² Score", f"{r2_score(y_test, predictions):.4f}")
             st.metric("MAE", f"{mean_absolute_error(y_test, predictions):.4f}")
         with col2:
             st.metric("RMSE", f"{np.sqrt(mean_squared_error(y_test, predictions)):.4f}")
@@ -1191,53 +1188,53 @@ def evaluation_page():
                 mape = np.mean(np.abs((y_test[mask] - predictions[mask]) / y_test[mask])) * 100
                 st.metric("MAPE (%)", f"{mape:.2f}")
             else:
-                st.metric("MAPE (%)", "N/A (存在零值)")
+                st.metric("MAPE (%)", "N/A (zero values present)")
 
-        # 残差图
+        # Residuals plot
         residuals = y_test - predictions
         fig = px.scatter(x=predictions, y=residuals,
-                         labels={'x': '预测值', 'y': '残差'},
-                         title="残差 vs 预测值")
+                         labels={'x': 'Predicted Values', 'y': 'Residuals'},
+                         title="Residuals vs Predicted")
         fig.add_hline(y=0, line_dash="dash", line_color="red")
         st.plotly_chart(fig, use_container_width=True)
 
-        # 实际 vs 预测
+        # Actual vs Predicted
         fig = px.scatter(x=y_test, y=predictions,
-                         labels={'x': '实际值', 'y': '预测值'},
-                         title="实际值 vs 预测值")
+                         labels={'x': 'Actual', 'y': 'Predicted'},
+                         title="Actual vs Predicted")
         fig.add_trace(go.Scatter(x=[y_test.min(), y_test.max()],
                                  y=[y_test.min(), y_test.max()],
-                                 mode='lines', name='理想线', line=dict(dash='dash', color='red')))
+                                 mode='lines', name='Ideal', line=dict(dash='dash', color='red')))
         st.plotly_chart(fig, use_container_width=True)
 
 # ---------- Export page ----------
 def export_page():
     import pickle
-    st.markdown('<h2 class="sub-header">💾 导出模型和结果</h2>', unsafe_allow_html=True)
+    st.markdown('<h2 class="sub-header">💾 Export Model and Results</h2>', unsafe_allow_html=True)
     if not st.session_state.training_complete:
-        st.warning("⚠️ 请先训练模型再导出结果。")
-        if st.button("前往模型训练"):
+        st.warning("⚠️ Please train a model first to export results.")
+        if st.button("Go to Model Training"):
             st.session_state.app_page = "📐 Model Training"
             st.rerun()
         return
 
     col1, col2 = st.columns(2)
     with col1:
-        st.markdown("#### 📊 模型信息")
-        if st.button("显示模型详情"):
-            st.write("**最佳模型：**", st.session_state.model)
-        if st.button("💾 下载模型 (pickle)"):
+        st.markdown("#### 📊 Model Information")
+        if st.button("Show Model Details"):
+            st.write("**Best Model:**", st.session_state.model)
+        if st.button("💾 Download Model (pickle)"):
             model_bytes = pickle.dumps(st.session_state.model)
             st.download_button(
-                label="点击下载模型",
+                label="Click to download model",
                 data=model_bytes,
                 file_name="ml_model.pkl",
                 mime="application/octet-stream",
                 key="model_download"
             )
     with col2:
-        st.markdown("#### 📊 模型报告")
-        if st.button("生成模型报告"):
+        st.markdown("#### 📊 Model Report")
+        if st.button("Generate Model Report"):
             if st.session_state.data is not None:
                 dataset_shape = st.session_state.data.shape
                 feature_count = len(st.session_state.data.columns) - 1
@@ -1246,55 +1243,55 @@ def export_page():
                 feature_count = "N/A"
 
             report_content = f"""
-# 机器学习模型报告
+# Machine Learning Model Report
 
-## 项目信息
-- 平台：No-Code ML Platform
-- 生成时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-- 问题类型：{st.session_state.problem_type}
-- 目标列：{st.session_state.target_column}
+## Project Information
+- Platform: No-Code ML Platform
+- Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+- Problem Type: {st.session_state.problem_type}
+- Target Column: {st.session_state.target_column}
 
-## 数据集信息
-- 原始形状：{dataset_shape}
-- 特征数：{feature_count}
+## Dataset Information
+- Original Shape: {dataset_shape}
+- Features: {feature_count}
 
-## 模型信息
-- 最佳模型：{st.session_state.model}
-- 训练完成：{st.session_state.training_complete}
+## Model Information
+- Best Model: {st.session_state.model}
+- Training Completed: {st.session_state.training_complete}
 
-## 备注
-本模型由 No-Code ML Platform 通过 PyCaret AutoML 生成。
+## Notes
+This model was generated using PyCaret AutoML through the No-Code ML Platform.
 """
             st.code(report_content, language='markdown')
             pdf_bytes = text_to_simple_pdf_bytes(report_content, title="ML Model Report")
             st.download_button(
-                "📥 下载报告 (PDF)",
+                "📥 Download Report (PDF)",
                 data=pdf_bytes,
                 file_name="ml_model_report.pdf",
                 mime="application/pdf"
             )
             st.download_button(
-                "📥 下载报告 (Markdown)",
+                "📥 Download Report (Markdown)",
                 data=report_content,
                 file_name="ml_model_report.md",
                 mime="text/markdown"
             )
 
-    st.markdown("### 📋 会话信息")
+    st.markdown("### 📋 Session Information")
     session_info = {
-        "数据已加载": st.session_state.data is not None,
-        "目标列": st.session_state.target_column,
-        "问题类型": st.session_state.problem_type,
-        "模型已训练": st.session_state.training_complete,
-        "预测已生成": st.session_state.predictions is not None,
-        "测试标签已保存": st.session_state.test_labels is not None
+        "Data Loaded": st.session_state.data is not None,
+        "Target Column": st.session_state.target_column,
+        "Problem Type": st.session_state.problem_type,
+        "Model Trained": st.session_state.training_complete,
+        "Predictions Made": st.session_state.predictions is not None,
+        "Test Labels Saved": st.session_state.test_labels is not None
     }
-    session_df = pd.DataFrame.from_dict(session_info, orient='index', columns=['状态'])
+    session_df = pd.DataFrame.from_dict(session_info, orient='index', columns=['Status'])
     st.dataframe(session_df, use_container_width=True)
 
-    st.markdown("### 🔄 重置平台")
-    st.warning("这将清除当前会话中的所有数据和模型。")
-    if st.button("🔄 重置所有数据", type="secondary"):
+    st.markdown("### 🔄 Reset Platform")
+    st.warning("This will clear all data and models from the current session.")
+    if st.button("🔄 Reset All Data", type="secondary"):
         keys = [
             "data", "target_column", "problem_type", "model", "predictions",
             "test_labels", "training_complete", "cleaned_data", "label_encoder"
@@ -1308,7 +1305,7 @@ def export_page():
     st.markdown("---")
     _, col2, _ = st.columns([1, 2, 1])
     with col2:
-        if st.button("🔄 重新开始 (返回数据上传)", type="secondary", use_container_width=True):
+        if st.button("🔄 Start Over (Back to Data Upload)", type="secondary", use_container_width=True):
             st.session_state.app_page = "📁 Data Upload"
             st.rerun()
 
@@ -1328,11 +1325,11 @@ def dashboard_page():
     </style>
     """, unsafe_allow_html=True)
 
-    st.markdown(f"<h1 style='color: black;'>欢迎，{st.session_state.user_name}！</h1>", unsafe_allow_html=True)
+    st.markdown(f"<h1 style='color: black;'>Welcome, {st.session_state.user_name}!</h1>", unsafe_allow_html=True)
 
     with st.sidebar:
         st.image("https://cdn-icons-png.flaticon.com/512/2103/2103832.png", width=100)
-        st.markdown("### 步骤导航")
+        st.markdown("### Sequential Steps")
         app_page_options = [
             "📁 Data Upload",
             "🧹 Data Cleaning",
@@ -1347,25 +1344,25 @@ def dashboard_page():
             default_index = 0
             st.session_state.app_page = app_page_options[0]
 
-        selected = st.radio("选择步骤：", app_page_options, index=default_index)
+        selected = st.radio("Select a step:", app_page_options, index=default_index)
         st.session_state.app_page = selected
 
         st.markdown("---")
-        st.markdown("### 平台信息")
+        st.markdown("### Platform Info")
         st.info("""
-        本平台支持：
-        - CSV 数据上传
-        - 基础数据清洗
-        - 自动化 EDA
+        This platform enables:
+        - CSV data upload
+        - Basic data cleaning
+        - Automated EDA
         - PyCaret AutoML
-        - 模型评估与解释性
-        - 导出模型和报告
+        - Model evaluation with interpretability
+        - Export model report
         """)
         if not PYCARET_AVAILABLE:
-            st.error("⚠️ PyCaret 未安装。请运行：`pip install pycaret`")
+            st.error("⚠️ PyCaret not installed. Install with: `pip install pycaret`")
             st.code("pip install pycaret", language="bash")
 
-        if st.button("👋🏻 退出登录", type="primary"):
+        if st.button("👋🏻 Logout", type="primary"):
             st.session_state.logged_in = False
             st.session_state.user_name = ""
             keys = [
