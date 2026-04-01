@@ -640,7 +640,7 @@ def upload_page():
                     })
                     st.dataframe(col_types, use_container_width=True)
 
-                # --- Auto‑detect target candidates ---
+                # --- Auto‑detect target candidates (displayed directly, no expander) ---
                 classification_candidates = []
                 regression_candidates = []
 
@@ -658,37 +658,26 @@ def upload_page():
                     # Ignore other types (e.g., datetime)
 
                 st.markdown("### 🎯 Detected Target Candidates")
-                with st.expander("Click to see possible target columns (for reference)", expanded=False):
-                    col1a, col2a = st.columns(2)
-                    with col1a:
-                        st.markdown("**Classification Targets**")
-                        if classification_candidates:
-                            st.write(", ".join(classification_candidates))
-                        else:
-                            st.write("None detected")
-                    with col2a:
-                        st.markdown("**Regression Targets**")
-                        if regression_candidates:
-                            st.write(", ".join(regression_candidates))
-                        else:
-                            st.write("None detected")
+                col1a, col2a = st.columns(2)
+                with col1a:
+                    st.markdown("**Classification Targets**")
+                    if classification_candidates:
+                        st.write(", ".join(classification_candidates))
+                    else:
+                        st.write("None detected")
+                with col2a:
+                    st.markdown("**Regression Targets**")
+                    if regression_candidates:
+                        st.write(", ".join(regression_candidates))
+                    else:
+                        st.write("None detected")
                 st.markdown("---")
 
             except Exception as e:
                 st.error(f"Error loading file: {str(e)}")
 
     with col2:
-        st.markdown("""
-        <div class="warning-box">
-        <h4>⚠️ Important Notes</h4>
-        <ul>
-            <li>Ensure your data is clean</li>
-            <li>Remove sensitive information</li>
-            <li>Check for missing values</li>
-            <li>Define target variable clearly</li>
-        </ul>
-        </div>
-        """, unsafe_allow_html=True)
+        # Removed the Important Notes warning box
         if st.session_state.data is not None:
             st.markdown("### 📌 Define Target Column")
             target_col = st.selectbox(
@@ -1259,6 +1248,14 @@ def evaluation_page():
                                  mode='lines', name='Ideal', line=dict(dash='dash', color='red')))
         st.plotly_chart(fig, use_container_width=True)
 
+    # --- Button to go to Export Results ---
+    st.markdown("---")
+    _, col2, _ = st.columns([1, 2, 1])
+    with col2:
+        if st.button("📤 Go to Export Results", type="primary", use_container_width=True):
+            st.session_state.app_page = "💾 Export Results"
+            st.rerun()
+
 # ---------- Export page ----------
 def export_page():
     st.markdown('<h2 class="sub-header">💾 Export Model and Results</h2>', unsafe_allow_html=True)
@@ -1352,18 +1349,7 @@ This model was generated using PyCaret AutoML through the No-Code ML Platform.
     session_df = pd.DataFrame.from_dict(session_info, orient='index', columns=['Status'])
     st.dataframe(session_df, use_container_width=True)
 
-    st.markdown("### 🔄 Reset Platform")
-    st.warning("This will clear all data and models from the current session.")
-    if st.button("🔄 Reset All Data", type="secondary"):
-        keys = [
-            "data", "target_column", "problem_type", "model", "predictions",
-            "test_labels", "training_complete", "cleaned_data", "label_encoder", "feature_names"
-        ]
-        for key in keys:
-            if key in st.session_state:
-                st.session_state[key] = None
-        st.session_state.app_page = "📁 Data Upload"
-        st.rerun()
+    # Removed "Reset Platform" section (heading, warning, and button)
 
     st.markdown("---")
     _, col2, _ = st.columns([1, 2, 1])
@@ -1410,17 +1396,6 @@ def dashboard_page():
         selected = st.radio("Select a step:", app_page_options, index=default_index)
         st.session_state.app_page = selected
 
-        st.markdown("---")
-        st.markdown("### Platform Info")
-        st.info("""
-        This platform enables:
-        - CSV data upload
-        - Basic data cleaning
-        - Automated EDA
-        - PyCaret AutoML
-        - Model evaluation with interpretability
-        - Export model report
-        """)
         if not PYCARET_AVAILABLE:
             st.error("⚠️ PyCaret not installed. Install with: `pip install pycaret`")
             st.code("pip install pycaret", language="bash")
