@@ -212,11 +212,11 @@ def authenticate_user(email, password):
             return False, None
         user = response.data[0]
         if verify_password(password, user.get("password", "")):
-            return True, user["name"]
-        return False, None
+            return True, user["name"], user["email"]
+        return False, None, None
     except Exception as e:
         st.error(f"Authentication failed: {e}")
-        return False, None
+        return False, None, None
 
 # ---------- Page navigation ----------
 if "page" not in st.session_state:
@@ -225,6 +225,8 @@ if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
 if "user_name" not in st.session_state:
     st.session_state.user_name = ""
+if "user_email" not in st.session_state:
+    st.session_state.user_email = ""
 
 def go_to(page):
     st.session_state.page = page
@@ -237,7 +239,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# ---------- Global CSS styles ----------
+# ---------- Global CSS styles (including download buttons) ----------
 st.markdown("""
 <style>
     .main-header {
@@ -275,7 +277,7 @@ st.markdown("""
         border-radius: 5px;
         margin: 1rem 0;
     }
-    div.stButton > button {
+    div.stButton > button, div.stDownloadButton > button {
         background: linear-gradient(135deg, #2196F3, #9C27B0) !important;
         color: white !important;
         border: none !important;
@@ -286,7 +288,7 @@ st.markdown("""
         width: 100% !important;
         margin-top: 1rem !important;
     }
-    div.stButton > button:hover {
+    div.stButton > button:hover, div.stDownloadButton > button:hover {
         transform: scale(1.02) !important;
         box-shadow: 0 4px 12px rgba(33, 150, 243, 0.4) !important;
     }
@@ -569,10 +571,11 @@ def login_page():
                 password = st.text_input("Password", type="password")
                 submitted = st.form_submit_button("Login")
                 if submitted:
-                    success, name = authenticate_user(email, password)
+                    success, name, email_ret = authenticate_user(email, password)
                     if success:
                         st.session_state.logged_in = True
                         st.session_state.user_name = name
+                        st.session_state.user_email = email_ret
                         go_to("dashboard")
                         st.rerun()
                     else:
@@ -640,7 +643,7 @@ def upload_page():
                     })
                     st.dataframe(col_types, use_container_width=True)
 
-                # --- Auto‑detect target candidates (displayed directly, no expander) ---
+                # --- Auto‑detect target candidates (displayed directly) ---
                 classification_candidates = []
                 regression_candidates = []
 
@@ -677,7 +680,6 @@ def upload_page():
                 st.error(f"Error loading file: {str(e)}")
 
     with col2:
-        # Removed the Important Notes warning box
         if st.session_state.data is not None:
             st.markdown("### 📌 Define Target Column")
             target_col = st.selectbox(
@@ -1135,8 +1137,6 @@ def evaluation_page():
         st.error("Test data or predictions contain NaN values. Cannot compute metrics.")
         return
 
-    # [REMOVED: prediction download button - moved to export page]
-
     with st.expander("🔍 Model Information", expanded=False):
         st.markdown("#### Best Model")
         st.code(str(model), language='python')
@@ -1355,6 +1355,14 @@ This model was generated using PyCaret AutoML through the No-Code ML Platform.
     _, col2, _ = st.columns([1, 2, 1])
     with col2:
         if st.button("🔄 Start Over (Back to Data Upload)", type="secondary", use_container_width=True):
+            # Reset all relevant session state variables
+            keys_to_reset = [
+                "data", "target_column", "problem_type", "model", "predictions",
+                "test_labels", "training_complete", "cleaned_data", "label_encoder", "feature_names"
+            ]
+            for key in keys_to_reset:
+                if key in st.session_state:
+                    st.session_state[key] = None
             st.session_state.app_page = "📁 Data Upload"
             st.rerun()
 
@@ -1376,25 +1384,42 @@ def dashboard_page():
 
     st.markdown(f"<h1 style='color: black;'>Welcome, {st.session_state.user_name}!</h1>", unsafe_allow_html=True)
 
+    # Sidebar selection synchronisation
+    app_page_options = [
+        "📁 Data Upload",
+        "🧹 Data Cleaning",
+        "🔍 Exploratory Data Analysis",
+        "📐 Model Training",
+        "📈 Model Evaluation",
+        "💾 Export Results"
+    ]
+
+    # If the sidebar selection is not yet initialised, set it to current app_page
+    if "sidebar_selection" not in st.session_state:
+        st.session_state.sidebar_selection = st.session_state.app_page
+
     with st.sidebar:
         st.image("https://cdn-icons-png.flaticon.com/512/2103/2103832.png", width=100)
-        st.markdown("### Sequential Steps")
-        app_page_options = [
-            "📁 Data Upload",
-            "🧹 Data Cleaning",
-            "🔍 Exploratory Data Analysis",
-            "📐 Model Training",
-            "📈 Model Evaluation",
-            "💾 Export Results"
-        ]
-        if st.session_state.app_page in app_page_options:
-            default_index = app_page_options.index(st.session_state.app_page)
-        else:
-            default_index = 0
-            st.session_state.app_page = app_page_options[0]
 
-        selected = st.radio("Select a step:", app_page_options, index=default_index)
-        st.session_state.app_page = selected
+        # Account Information section
+        st.markdown("### 👤 Account Information")
+        st.write(f"**Name:** {st.session_state.user_name}")
+        st.write(f"**Email:** {st.session_state.user_email}")
+        st.markdown("---")
+
+        st.markdown("### Sequential Steps")
+        selected = st.radio(
+            "Select a step:",
+            app_page_options,
+            index=app_page_options.index(st.session_state.sidebar_selection),
+            key="sidebar_radio"
+        )
+
+        # Update both sidebar_selection and app_page if the radio changed
+        if selected != st.session_state.sidebar_selection:
+            st.session_state.sidebar_selection = selected
+            st.session_state.app_page = selected
+            st.rerun()
 
         if not PYCARET_AVAILABLE:
             st.error("⚠️ PyCaret not installed. Install with: `pip install pycaret`")
@@ -1403,16 +1428,19 @@ def dashboard_page():
         if st.button("👋🏻 Logout", type="primary"):
             st.session_state.logged_in = False
             st.session_state.user_name = ""
-            keys = [
+            st.session_state.user_email = ""
+            # Clear all model-related data
+            keys_to_clear = [
                 "data", "target_column", "problem_type", "model", "predictions",
                 "test_labels", "training_complete", "cleaned_data", "label_encoder", "feature_names"
             ]
-            for key in keys:
+            for key in keys_to_clear:
                 if key in st.session_state:
                     st.session_state[key] = None
             go_to("front")
             st.rerun()
 
+    # Page routing based on app_page (not sidebar_selection)
     if st.session_state.app_page == "📁 Data Upload":
         upload_page()
     elif st.session_state.app_page == "🧹 Data Cleaning":
