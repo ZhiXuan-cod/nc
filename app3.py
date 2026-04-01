@@ -14,6 +14,7 @@ from sklearn.metrics import (
     confusion_matrix, classification_report,
     mean_absolute_error, mean_squared_error, r2_score
 )
+from sklearn.model_selection import train_test_split
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -313,6 +314,14 @@ if "cleaned_data" not in st.session_state:
     st.session_state.cleaned_data = None
 if "label_encoder" not in st.session_state:
     st.session_state.label_encoder = None
+if "X_train" not in st.session_state:
+    st.session_state.X_train = None
+if "X_test" not in st.session_state:
+    st.session_state.X_test = None
+if "y_train" not in st.session_state:
+    st.session_state.y_train = None
+if "y_test" not in st.session_state:
+    st.session_state.y_test = None
 
 # ---------- Helper function for cleaning (protects target column) ----------
 def apply_cleaning(df, drop_duplicates, missing_option, outlier_option,
@@ -857,7 +866,7 @@ def eda_page():
         else:
             st.button("➡️ Go to Model Training (set target first)", disabled=True, use_container_width=True)
 
-# ---------- Training page (updated with fix for np.isinf and PyCaret error handling) ----------
+# ---------- Training page (with manual train/test split) ----------
 def training_page():
     st.markdown('<h2 class="sub-header">📐 Automated Model Training with PyCaret</h2>', unsafe_allow_html=True)
 
@@ -898,16 +907,9 @@ def training_page():
         if np.isinf(df[col]).any():
             st.warning(f"Feature column '{col}' contains infinite values. They may cause training errors. Consider cleaning them.")
 
-    # Optional debug info
-    with st.expander("Debug: Current Columns"):
-        st.write("DataFrame columns:", df.columns.tolist())
-        st.write("Target column:", target_col)
-        st.write("Data shape:", df.shape)
-
     if problem_type == "Classification" and df[target_col].nunique() > 20:
         st.warning(f"Target column has {df[target_col].nunique()} unique values. Classification may be slow or have low accuracy. Consider regression or reduce categories.")
 
-    # Check dataset size
     if len(df) < 20:
         st.warning("⚠️ Dataset has very few rows (<20). Model may not generalize well.")
 
@@ -967,19 +969,43 @@ def training_page():
     if st.button("🚀 Start Automated Training", type="primary", use_container_width=True):
         with st.spinner(f"🧠 PyCaret is training {len(allowed_models)} models with {fold}-fold CV. This may take a few minutes..."):
             try:
-                # Perform setup
+                # ---------- Manual train/test split ----------
+                X = df.drop(columns=[target_col])
+                y = df[target_col]
+
+                # Use stratification for classification if target is categorical
+                stratify = None
+                if problem_type == "Classification" and y.dtype == 'object':
+                    stratify = y
+
+                X_train, X_test, y_train, y_test = train_test_split(
+                    X, y, test_size=test_size, random_state=random_state, stratify=stratify
+                )
+
+                # Store test data for later evaluation
+                st.session_state.test_data = {'X_test': X_test, 'y_test': y_test}
+                # Also store for potential reuse
+                st.session_state.X_train = X_train
+                st.session_state.X_test = X_test
+                st.session_state.y_train = y_train
+                st.session_state.y_test = y_test
+
+                # Create training DataFrame for PyCaret
+                train_df = pd.concat([X_train, y_train], axis=1)
+
+                # Perform PyCaret setup using only the training data
                 if problem_type == "Classification":
                     _pycaret_setup_safe(
                         clf_setup,
-                        data=df,
+                        data=train_df,
                         target=target_col,
-                        train_size=1 - test_size,
+                        train_size=1.0,          # Use all training data for training
                         session_id=random_state,
                         fold=fold,
                         n_jobs=1,
                         html=False,
                         verbose=False,
-                        preprocess=True,           # Let PyCaret handle preprocessing
+                        preprocess=True,
                         ignore_low_variance=False,
                         remove_multicollinearity=False,
                         log_experiment=False
@@ -987,9 +1013,9 @@ def training_page():
                 else:
                     _pycaret_setup_safe(
                         reg_setup,
-                        data=df,
+                        data=train_df,
                         target=target_col,
-                        train_size=1 - test_size,
+                        train_size=1.0,
                         session_id=random_state,
                         fold=fold,
                         n_jobs=1,
@@ -1026,23 +1052,15 @@ def training_page():
                         sort='R2'
                     )
 
-                # Retrieve test data
-                try:
-                    X_test = get_config('X_test')
-                    y_test = get_config('y_test')
-                except Exception as e:
-                    st.error(f"Failed to retrieve test data: {e}")
-                    return
-
-                # Make predictions
+                # Make predictions on the original test set (X_test)
                 if problem_type == "Classification":
                     pred_df = clf_predict(best_model, data=X_test)
                 else:
                     pred_df = reg_predict(best_model, data=X_test)
+
                 test_predictions = pred_df.iloc[:, -1]
 
                 # Store results
-                st.session_state.test_data = {'X_test': X_test, 'y_test': y_test}
                 st.session_state.predictions = test_predictions.values
                 st.session_state.model = best_model
                 st.session_state.training_complete = True
@@ -1054,10 +1072,8 @@ def training_page():
                         st.markdown("#### 🔍 Feature Importance (top 10)")
                         if hasattr(best_model, 'feature_names_in_'):
                             feature_names = best_model.feature_names_in_
-                        elif isinstance(X_test, pd.DataFrame):
-                            feature_names = X_test.columns
                         else:
-                            feature_names = [f"Feature_{i}" for i in range(len(best_model.feature_importances_))]
+                            feature_names = X_train.columns
                         imp_df = pd.DataFrame({'feature': feature_names, 'importance': best_model.feature_importances_})
                         imp_df = imp_df.sort_values('importance', ascending=False).head(10)
                         st.dataframe(imp_df, use_container_width=True)
@@ -1074,7 +1090,7 @@ def training_page():
                 st.error(f"❌ Training failed: {type(e).__name__}: {str(e)}")
                 st.exception(e)   # Show full traceback for debugging
 
-# ---------- Evaluation page (improved for classification metrics) ----------
+# ---------- Evaluation page (improved for classification) ----------
 def evaluation_page():
     st.markdown('<h2 class="sub-header">📈 Model Performance Evaluation</h2>', unsafe_allow_html=True)
 
@@ -1096,170 +1112,119 @@ def evaluation_page():
     predictions = st.session_state.predictions
     test_data = st.session_state.test_data
     y_test = test_data['y_test']
-    problem_type = st.session_state.problem_type
     X_test = test_data['X_test']
-    if isinstance(X_test, pd.DataFrame):
-        feature_names = X_test.columns.tolist()
-    else:
-        feature_names = [f"Feature_{i}" for i in range(X_test.shape[1])]
+    problem_type = st.session_state.problem_type
 
-    try:
-        y_test = np.asarray(y_test).ravel()
-        predictions = np.asarray(predictions).ravel()
+    # Ensure correct shapes
+    y_test = np.asarray(y_test).ravel()
+    predictions = np.asarray(predictions).ravel()
 
-        # Ensure no NaN values
-        if pd.isnull(y_test).any() or pd.isnull(predictions).any():
-            st.error("Test data or predictions contain NaN values. Cannot compute metrics.")
-            return
+    if pd.isnull(y_test).any() or pd.isnull(predictions).any():
+        st.error("Test data or predictions contain NaN values. Cannot compute metrics.")
+        return
 
-        with st.expander("🔍 Model Information", expanded=False):
-            st.markdown("#### Best Model")
-            st.code(str(model), language='python')
-            try:
-                if hasattr(model, 'feature_importances_'):
-                    st.markdown("#### Feature Importance (all)")
-                    if hasattr(model, 'feature_names_in_'):
-                        feat_names = model.feature_names_in_
-                    else:
-                        feat_names = feature_names
-                    if len(feat_names) == len(model.feature_importances_):
-                        imp_df = pd.DataFrame({'feature': feat_names, 'importance': model.feature_importances_})
-                        imp_df = imp_df.sort_values('importance', ascending=False)
-                        st.dataframe(imp_df, use_container_width=True)
-                    else:
-                        st.info("Feature importance array length does not match feature names. Display skipped.")
-                elif hasattr(model, 'coef_'):
-                    coef = model.coef_
-                    if coef.ndim == 2:
-                        imp_df = pd.DataFrame({'feature': feature_names, 'importance': np.abs(coef).mean(axis=0)})
-                        imp_df = imp_df.sort_values('importance', ascending=False)
-                        st.markdown("#### Mean Absolute Coefficients (Multi-class)")
-                    else:
-                        imp_df = pd.DataFrame({'feature': feature_names, 'coefficient': coef})
-                        imp_df = imp_df.sort_values('coefficient', ascending=False)
+    with st.expander("🔍 Model Information", expanded=False):
+        st.markdown("#### Best Model")
+        st.code(str(model), language='python')
+        try:
+            if hasattr(model, 'feature_importances_'):
+                st.markdown("#### Feature Importance (all)")
+                if hasattr(model, 'feature_names_in_'):
+                    feat_names = model.feature_names_in_
+                else:
+                    feat_names = X_test.columns.tolist()
+                if len(feat_names) == len(model.feature_importances_):
+                    imp_df = pd.DataFrame({'feature': feat_names, 'importance': model.feature_importances_})
+                    imp_df = imp_df.sort_values('importance', ascending=False)
                     st.dataframe(imp_df, use_container_width=True)
                 else:
-                    st.info("This model does not support feature importance display.")
-            except Exception as e:
-                st.warning(f"Feature importance display failed: {e}")
-
-        if problem_type == "Classification":
-            st.markdown("### Classification Metrics")
-
-            # --- Convert predictions and true labels to strings, handling PyCaret's internal encoding ---
-            # PyCaret may encode string labels as integers; we need to map back to original labels
-            # Determine if y_test is string and predictions are integers (typical after PyCaret)
-            if y_test.dtype.kind in 'SU' and predictions.dtype.kind in 'iu':
-                # Map integer predictions back to original string labels
-                unique_true = np.unique(y_test)
-                # Assume PyCaret used the same order: 0 -> unique_true[0], 1 -> unique_true[1], ...
-                # This is safe because PyCaret internally uses LabelEncoder
-                mapping = {i: val for i, val in enumerate(unique_true)}
-                # Convert predictions to strings using mapping
-                predictions_str = np.array([mapping[int(p)] for p in predictions])
-                y_test_str = y_test.astype(str)  # Already strings
-                st.info("Mapped integer predictions back to original string labels.")
-            elif y_test.dtype.kind in 'SU' and predictions.dtype.kind in 'SU':
-                # Both are strings, but they might have different sets due to misalignment
-                # Convert both to string for safety
-                y_test_str = y_test.astype(str)
-                predictions_str = predictions.astype(str)
-                if set(np.unique(y_test_str)) != set(np.unique(predictions_str)):
-                    st.warning("Predicted and true label sets do not match. Metrics may be unreliable.")
-            elif y_test.dtype.kind in 'iu' and predictions.dtype.kind in 'iu':
-                # Both are integers; convert to string for metric functions (works with numeric labels too)
-                y_test_str = y_test.astype(str)
-                predictions_str = predictions.astype(str)
-                st.info("Using integer labels as strings.")
-            else:
-                # Fallback: convert everything to string
-                y_test_str = y_test.astype(str)
-                predictions_str = predictions.astype(str)
-
-            # Ensure both are 1D arrays of strings
-            y_test_str = y_test_str.flatten() if hasattr(y_test_str, 'flatten') else y_test_str
-            predictions_str = predictions_str.flatten() if hasattr(predictions_str, 'flatten') else predictions_str
-
-            # Debug output
-            with st.expander("Debug: Label Sets"):
-                st.write("Unique true labels:", np.unique(y_test_str))
-                st.write("Unique predicted labels:", np.unique(predictions_str))
-                st.write("Number of true labels:", len(y_test_str))
-                st.write("Number of predictions:", len(predictions_str))
-
-            # Compute metrics with error handling
-            try:
-                acc = accuracy_score(y_test_str, predictions_str)
-                prec = precision_score(y_test_str, predictions_str, average='weighted', zero_division=0)
-                rec = recall_score(y_test_str, predictions_str, average='weighted', zero_division=0)
-                f1 = f1_score(y_test_str, predictions_str, average='weighted', zero_division=0)
-            except Exception as e:
-                st.error(f"Error computing classification metrics: {e}")
-                st.info("Check if both true and predicted labels have at least one class in common.")
-                return
-
-            col1, col2 = st.columns(2)
-            with col1:
-                st.metric("Accuracy", f"{acc:.4f}")
-                st.metric("Precision (weighted)", f"{prec:.4f}")
-                st.metric("Recall (weighted)", f"{rec:.4f}")
-            with col2:
-                st.metric("F1 Score (weighted)", f"{f1:.4f}")
-
-            # Confusion matrix
-            try:
-                cm = confusion_matrix(y_test_str, predictions_str)
-                fig = px.imshow(cm, text_auto=True, aspect="auto",
-                                labels=dict(x="Predicted", y="Actual", color="Count"),
-                                title="Confusion Matrix")
-                st.plotly_chart(fig, use_container_width=True)
-            except Exception as e:
-                st.error(f"Could not generate confusion matrix: {e}")
-
-            # Classification report
-            try:
-                report = classification_report(y_test_str, predictions_str, output_dict=True, zero_division=0)
-                report_df = pd.DataFrame(report).transpose()
-                st.dataframe(report_df, use_container_width=True)
-            except Exception as e:
-                st.error(f"Could not generate classification report: {e}")
-
-        else:  # Regression
-            st.markdown("### Regression Metrics")
-            col1, col2 = st.columns(2)
-            with col1:
-                st.metric("R² Score", f"{r2_score(y_test, predictions):.4f}")
-                st.metric("MAE", f"{mean_absolute_error(y_test, predictions):.4f}")
-            with col2:
-                st.metric("RMSE", f"{np.sqrt(mean_squared_error(y_test, predictions)):.4f}")
-                # MAPE with protection against zero actual values
-                mask = y_test != 0
-                if mask.any():
-                    mape = np.mean(np.abs((y_test[mask] - predictions[mask]) / y_test[mask])) * 100
-                    st.metric("MAPE (%)", f"{mape:.2f}")
+                    st.info("Feature importance array length does not match feature names. Display skipped.")
+            elif hasattr(model, 'coef_'):
+                coef = model.coef_
+                if coef.ndim == 2:
+                    imp_df = pd.DataFrame({'feature': X_test.columns, 'importance': np.abs(coef).mean(axis=0)})
+                    imp_df = imp_df.sort_values('importance', ascending=False)
+                    st.markdown("#### Mean Absolute Coefficients (Multi-class)")
                 else:
-                    st.metric("MAPE (%)", "N/A (zero values present)")
+                    imp_df = pd.DataFrame({'feature': X_test.columns, 'coefficient': coef})
+                    imp_df = imp_df.sort_values('coefficient', ascending=False)
+                st.dataframe(imp_df, use_container_width=True)
+            else:
+                st.info("This model does not support feature importance display.")
+        except Exception as e:
+            st.warning(f"Feature importance display failed: {e}")
 
-            # Residuals plot
-            residuals = y_test - predictions
-            fig = px.scatter(x=predictions, y=residuals,
-                             labels={'x': 'Predicted Values', 'y': 'Residuals'},
-                             title="Residuals vs Predicted")
-            fig.add_hline(y=0, line_dash="dash", line_color="red")
+    if problem_type == "Classification":
+        st.markdown("### Classification Metrics")
+
+        # Compute metrics (predictions are already in original label format)
+        try:
+            acc = accuracy_score(y_test, predictions)
+            prec = precision_score(y_test, predictions, average='weighted', zero_division=0)
+            rec = recall_score(y_test, predictions, average='weighted', zero_division=0)
+            f1 = f1_score(y_test, predictions, average='weighted', zero_division=0)
+        except Exception as e:
+            st.error(f"Error computing classification metrics: {e}")
+            return
+
+        col1, col2 = st.columns(2)
+        with col1:
+            st.metric("Accuracy", f"{acc:.4f}")
+            st.metric("Precision (weighted)", f"{prec:.4f}")
+        with col2:
+            st.metric("Recall (weighted)", f"{rec:.4f}")
+            st.metric("F1 Score (weighted)", f"{f1:.4f}")
+
+        # Confusion matrix
+        try:
+            cm = confusion_matrix(y_test, predictions)
+            fig = px.imshow(cm, text_auto=True, aspect="auto",
+                            labels=dict(x="Predicted", y="Actual", color="Count"),
+                            title="Confusion Matrix")
             st.plotly_chart(fig, use_container_width=True)
+        except Exception as e:
+            st.error(f"Could not generate confusion matrix: {e}")
 
-            # Actual vs Predicted
-            fig = px.scatter(x=y_test, y=predictions,
-                             labels={'x': 'Actual', 'y': 'Predicted'},
-                             title="Actual vs Predicted")
-            fig.add_trace(go.Scatter(x=[y_test.min(), y_test.max()],
-                                     y=[y_test.min(), y_test.max()],
-                                     mode='lines', name='Ideal', line=dict(dash='dash', color='red')))
-            st.plotly_chart(fig, use_container_width=True)
+        # Classification report
+        try:
+            report = classification_report(y_test, predictions, output_dict=True, zero_division=0)
+            report_df = pd.DataFrame(report).transpose()
+            st.dataframe(report_df, use_container_width=True)
+        except Exception as e:
+            st.error(f"Could not generate classification report: {e}")
 
-    except Exception as e:
-        st.error(f"Unknown error occurred during evaluation: {str(e)}")
-        st.exception(e)
+    else:  # Regression
+        st.markdown("### Regression Metrics")
+        col1, col2 = st.columns(2)
+        with col1:
+            st.metric("R² Score", f"{r2_score(y_test, predictions):.4f}")
+            st.metric("MAE", f"{mean_absolute_error(y_test, predictions):.4f}")
+        with col2:
+            st.metric("RMSE", f"{np.sqrt(mean_squared_error(y_test, predictions)):.4f}")
+            # MAPE with protection against zero actual values
+            mask = y_test != 0
+            if mask.any():
+                mape = np.mean(np.abs((y_test[mask] - predictions[mask]) / y_test[mask])) * 100
+                st.metric("MAPE (%)", f"{mape:.2f}")
+            else:
+                st.metric("MAPE (%)", "N/A (zero values present)")
+
+        # Residuals plot
+        residuals = y_test - predictions
+        fig = px.scatter(x=predictions, y=residuals,
+                         labels={'x': 'Predicted Values', 'y': 'Residuals'},
+                         title="Residuals vs Predicted")
+        fig.add_hline(y=0, line_dash="dash", line_color="red")
+        st.plotly_chart(fig, use_container_width=True)
+
+        # Actual vs Predicted
+        fig = px.scatter(x=y_test, y=predictions,
+                         labels={'x': 'Actual', 'y': 'Predicted'},
+                         title="Actual vs Predicted")
+        fig.add_trace(go.Scatter(x=[y_test.min(), y_test.max()],
+                                 y=[y_test.min(), y_test.max()],
+                                 mode='lines', name='Ideal', line=dict(dash='dash', color='red')))
+        st.plotly_chart(fig, use_container_width=True)
 
 # ---------- Export page ----------
 def export_page():
@@ -1346,8 +1311,11 @@ This model was generated using PyCaret AutoML through the No-Code ML Platform.
     st.markdown("### 🔄 Reset Platform")
     st.warning("This will clear all data and models from the current session.")
     if st.button("🔄 Reset All Data", type="secondary"):
-        keys = ["data", "target_column", "problem_type", "model", "predictions", "test_data", "training_complete",
-                "cleaned_data", "label_encoder"]
+        keys = [
+            "data", "target_column", "problem_type", "model", "predictions",
+            "test_data", "training_complete", "cleaned_data", "label_encoder",
+            "X_train", "X_test", "y_train", "y_test"
+        ]
         for key in keys:
             if key in st.session_state:
                 st.session_state[key] = None
@@ -1418,7 +1386,7 @@ def dashboard_page():
             st.session_state.logged_in = False
             st.session_state.user_name = ""
             keys = ["data", "target_column", "problem_type", "model", "predictions", "test_data", "training_complete",
-                    "cleaned_data", "label_encoder"]
+                    "cleaned_data", "label_encoder", "X_train", "X_test", "y_train", "y_test"]
             for key in keys:
                 if key in st.session_state:
                     st.session_state[key] = None
