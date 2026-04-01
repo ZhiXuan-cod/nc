@@ -369,7 +369,7 @@ def apply_cleaning(df, drop_duplicates, missing_option, outlier_option,
     elif outlier_option != "None" and not SCIPY_AVAILABLE:
         st.warning("Scipy not installed. Z‑score outlier detection disabled. Use 'Cap' option instead.")
 
-    # Categorical encoding (skip target) - 注意：清洗页面强制传入 "None"，所以此部分不会执行
+    # Categorical encoding (skip target) - 清洗页面强制传入 "None"，所以此部分不会执行
     if encode_option != "None":
         cat_cols = cleaned.select_dtypes(include=['object']).columns
         cat_cols = [c for c in cat_cols if c != target_col]
@@ -1039,9 +1039,31 @@ def training_page():
                         st.markdown("#### 🔍 特征重要性（Top 10）")
                         X_train = get_config('X_train')
                         feature_names = X_train.columns.tolist()
-                        imp_df = pd.DataFrame({'feature': feature_names, 'importance': best_model.feature_importances_})
-                        imp_df = imp_df.sort_values('importance', ascending=False).head(10)
+                        importances = best_model.feature_importances_
+                        if len(feature_names) == len(importances):
+                            imp_df = pd.DataFrame({'feature': feature_names, 'importance': importances})
+                            imp_df = imp_df.sort_values('importance', ascending=False).head(10)
+                            st.dataframe(imp_df, use_container_width=True)
+                        else:
+                            st.warning(f"特征重要性数组长度 ({len(importances)}) 与特征名称长度 ({len(feature_names)}) 不匹配，无法显示特征重要性。")
+                    elif hasattr(best_model, 'coef_'):
+                        st.markdown("#### 🔍 模型系数")
+                        X_train = get_config('X_train')
+                        feature_names = X_train.columns.tolist()
+                        coef = best_model.coef_
+                        if coef.ndim == 2:
+                            # 多分类：取平均绝对值
+                            imp_df = pd.DataFrame({'feature': feature_names, 'importance': np.abs(coef).mean(axis=0)})
+                            imp_df = imp_df.sort_values('importance', ascending=False).head(10)
+                            st.markdown("平均绝对值系数（多分类）")
+                        else:
+                            imp_df = pd.DataFrame({'feature': feature_names, 'coefficient': coef})
+                            imp_df = imp_df.sort_values('coefficient', ascending=False).head(10)
+                            st.markdown("模型系数（线性模型）")
                         st.dataframe(imp_df, use_container_width=True)
+                    else:
+                        st.info("该模型不支持特征重要性或系数显示。")
+
                     comparison_df = pull()
                     if comparison_df is not None:
                         st.markdown("#### 📊 模型对比（Top 10）")
@@ -1092,23 +1114,25 @@ def evaluation_page():
         try:
             if hasattr(model, 'feature_importances_'):
                 st.markdown("#### 特征重要性（全部）")
-                # 获取特征名（从训练时 PyCaret 保存的 X_train 获取）
                 X_train = get_config('X_train')
                 feat_names = X_train.columns.tolist()
-                if len(feat_names) == len(model.feature_importances_):
-                    imp_df = pd.DataFrame({'feature': feat_names, 'importance': model.feature_importances_})
+                importances = model.feature_importances_
+                if len(feat_names) == len(importances):
+                    imp_df = pd.DataFrame({'feature': feat_names, 'importance': importances})
                     imp_df = imp_df.sort_values('importance', ascending=False)
                     st.dataframe(imp_df, use_container_width=True)
                 else:
                     st.info("特征重要性数组长度与特征名不匹配，跳过显示。")
             elif hasattr(model, 'coef_'):
+                X_train = get_config('X_train')
+                feat_names = X_train.columns.tolist()
                 coef = model.coef_
                 if coef.ndim == 2:
-                    imp_df = pd.DataFrame({'feature': X_train.columns, 'importance': np.abs(coef).mean(axis=0)})
+                    imp_df = pd.DataFrame({'feature': feat_names, 'importance': np.abs(coef).mean(axis=0)})
                     imp_df = imp_df.sort_values('importance', ascending=False)
                     st.markdown("#### 平均绝对值系数（多分类）")
                 else:
-                    imp_df = pd.DataFrame({'feature': X_train.columns, 'coefficient': coef})
+                    imp_df = pd.DataFrame({'feature': feat_names, 'coefficient': coef})
                     imp_df = imp_df.sort_values('coefficient', ascending=False)
                 st.dataframe(imp_df, use_container_width=True)
             else:
