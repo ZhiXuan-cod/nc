@@ -857,7 +857,7 @@ def eda_page():
         else:
             st.button("➡️ Go to Model Training (set target first)", disabled=True, use_container_width=True)
 
-# ---------- Training page (updated with fix for np.isinf) ----------
+# ---------- Training page (updated with fix for np.isinf and PyCaret error handling) ----------
 def training_page():
     st.markdown('<h2 class="sub-header">📐 Automated Model Training with PyCaret</h2>', unsafe_allow_html=True)
 
@@ -967,6 +967,7 @@ def training_page():
     if st.button("🚀 Start Automated Training", type="primary", use_container_width=True):
         with st.spinner(f"🧠 PyCaret is training {len(allowed_models)} models with {fold}-fold CV. This may take a few minutes..."):
             try:
+                # Perform setup
                 if problem_type == "Classification":
                     _pycaret_setup_safe(
                         clf_setup,
@@ -978,15 +979,10 @@ def training_page():
                         n_jobs=1,
                         html=False,
                         verbose=False,
+                        preprocess=True,           # Let PyCaret handle preprocessing
                         ignore_low_variance=False,
                         remove_multicollinearity=False,
                         log_experiment=False
-                    )
-                    best_model = clf_compare(
-                        include=allowed_models,
-                        n_select=1,
-                        verbose=False,
-                        sort='Accuracy'
                     )
                 else:
                     _pycaret_setup_safe(
@@ -999,10 +995,30 @@ def training_page():
                         n_jobs=1,
                         html=False,
                         verbose=False,
+                        preprocess=True,
                         ignore_low_variance=False,
                         remove_multicollinearity=False,
                         log_experiment=False
                     )
+
+                # Verify that the experiment is active
+                try:
+                    _ = get_config('X_train')
+                except Exception as e:
+                    st.error(f"❌ PyCaret setup did not complete properly. The experiment could not be initialised.")
+                    st.error(f"Error: {e}")
+                    st.info("Check the data for issues like all constant columns, unsupported data types, or target column problems.")
+                    return
+
+                # Compare models
+                if problem_type == "Classification":
+                    best_model = clf_compare(
+                        include=allowed_models,
+                        n_select=1,
+                        verbose=False,
+                        sort='Accuracy'
+                    )
+                else:
                     best_model = reg_compare(
                         include=allowed_models,
                         n_select=1,
@@ -1010,6 +1026,7 @@ def training_page():
                         sort='R2'
                     )
 
+                # Retrieve test data
                 try:
                     X_test = get_config('X_test')
                     y_test = get_config('y_test')
@@ -1017,12 +1034,14 @@ def training_page():
                     st.error(f"Failed to retrieve test data: {e}")
                     return
 
+                # Make predictions
                 if problem_type == "Classification":
                     pred_df = clf_predict(best_model, data=X_test)
                 else:
                     pred_df = reg_predict(best_model, data=X_test)
                 test_predictions = pred_df.iloc[:, -1]
 
+                # Store results
                 st.session_state.test_data = {'X_test': X_test, 'y_test': y_test}
                 st.session_state.predictions = test_predictions.values
                 st.session_state.model = best_model
@@ -1053,7 +1072,7 @@ def training_page():
 
             except Exception as e:
                 st.error(f"❌ Training failed: {type(e).__name__}: {str(e)}")
-                print(f"Training error: {type(e).__name__}: {e}")
+                st.exception(e)   # Show full traceback for debugging
 
 # ---------- Evaluation page (updated) ----------
 def evaluation_page():
@@ -1123,29 +1142,23 @@ def evaluation_page():
             st.markdown("### Classification Metrics")
 
             # --- Handle label mapping if needed ---
-            # PyCaret internally encodes string labels as integers 0..n-1
-            # We need to map predictions back to original labels for metrics
             y_test_original = y_test
             pred_original = predictions
 
             # If y_test is string but predictions are integers, map integers to strings
             if y_test.dtype.kind in 'SU' and predictions.dtype.kind in 'iu':
                 unique_true = np.unique(y_test)
-                # PyCaret uses the same order as np.unique for encoding
-                # map integer to string using that order
                 mapping = {i: val for i, val in enumerate(unique_true)}
                 pred_original = np.array([mapping[int(p)] for p in predictions])
                 st.info("Mapped integer predictions to original string labels.")
             # If both are strings but different sets (should not happen), try to align
             elif y_test.dtype.kind in 'SU' and predictions.dtype.kind in 'SU':
-                # both strings, ensure same set
                 unique_true = np.unique(y_test)
                 unique_pred = np.unique(predictions)
                 if set(unique_true) != set(unique_pred):
                     st.warning(f"Predicted labels ({unique_pred}) do not match true labels ({unique_true}). Metrics may be invalid.")
-            # If both are integers, leave as is (likely already numeric classes)
+            # If both are integers, leave as is
             elif y_test.dtype.kind in 'iu' and predictions.dtype.kind in 'iu':
-                # nothing to do
                 pass
             else:
                 # Fallback: convert both to string
