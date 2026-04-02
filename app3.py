@@ -1482,6 +1482,12 @@ def dashboard_page():
 
         if selected_page != st.session_state.page:
             go_to(selected_page)
+            
+def go_to(page: str):
+    st.write(f"🟢 go_to called: target={page}, current={st.session_state.page}")
+    if st.session_state.page != page:
+        st.session_state.page = page
+        st.rerun()
 
         if not PYCARET_AVAILABLE:
             st.error("⚠️ PyCaret not installed. Install with: `pip install pycaret`")
