@@ -1034,7 +1034,6 @@ def account_page():
                                 st.error("Current password is incorrect.")
                     except Exception as e:
                         st.error(f"Failed to update password: {e}")
-    # No back button needed because user can select another step in sidebar
 
 def dashboard_page():
     set_bg_image_local("purple.png")
@@ -1052,8 +1051,7 @@ def dashboard_page():
     }
     with st.sidebar:
         st.image("https://cdn-icons-png.flaticon.com/512/2103/2103832.png", width=100)
-        st.markdown(f"**User:** {st.session_state.user_name}")
-        st.markdown(f"**Email:** {st.session_state.user_email}")
+        # Removed user name and email from sidebar as per requirement
         st.markdown("---")
         st.markdown("### Sequential Steps")
         if st.session_state.page in workflow_pages:
