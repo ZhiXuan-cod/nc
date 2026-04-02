@@ -728,7 +728,7 @@ def upload_page():
         else:
             st.button("➡️ Go to Data Cleaning (set target first)", disabled=True, use_container_width=True)
 
-# ---------- Cleaning page ----------
+# ---------- Cleaning page (with updated button text) ----------
 def cleaning_page():
     # Redirect if no data or target
     if st.session_state.data is None or st.session_state.target_column is None:
@@ -774,7 +774,7 @@ def cleaning_page():
     _, col2, _ = st.columns([1, 2, 1])
     with col2:
         if st.session_state.cleaned_data is not None:
-            if st.button("✅ Apply Cleaning & Continue", type="primary", use_container_width=True):
+            if st.button("✅ Apply Cleaning (preview first)", type="primary", use_container_width=True):
                 cleaned = apply_cleaning(original_df, drop_duplicates, missing_option, outlier_option,
                                          encode_option="None", scale_option="None",
                                          cols_to_drop=cols_to_drop, target_col=target_col)
