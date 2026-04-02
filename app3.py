@@ -610,6 +610,8 @@ def login_page():
 # ---------- Upload page (with robust CSV reading) ----------
 def upload_page():
     st.markdown('<h2 class="sub-header">📁 Upload Your Dataset</h2>', unsafe_allow_html=True)
+
+    # Left column: upload and preview
     col1, col2 = st.columns([2, 1])
     with col1:
         st.markdown("""
@@ -623,11 +625,10 @@ def upload_page():
         </ul>
         </div>
         """, unsafe_allow_html=True)
+
         uploaded_file = st.file_uploader("Choose a CSV file", type=['csv'])
         if uploaded_file is not None:
-            if uploaded_file.size > 200 * 1024 * 1024:
-                st.warning("File size exceeds 200 MB. Large files may cause performance issues. Consider using a subset.")
-            # Try multiple encodings if the default fails
+            # Try multiple encodings
             encodings = ['utf-8', 'latin1', 'iso-8859-1', 'cp1252']
             df = None
             last_error = None
@@ -647,9 +648,14 @@ def upload_page():
                 return
             st.session_state.data = df
             st.success(f"✔️ Successfully loaded {len(df)} rows and {len(df.columns)} columns")
+
+        # Always show data preview if data exists in session state
+        if st.session_state.data is not None:
             st.markdown("### Data Preview")
-            st.dataframe(df.head(), use_container_width=True)
+            st.dataframe(st.session_state.data.head(), use_container_width=True)
+
             with st.expander("📊 Basic Data Statistics"):
+                df = st.session_state.data
                 st.write("**Shape:**", df.shape)
                 col_types = pd.DataFrame({
                     'Column': df.columns,
@@ -659,7 +665,7 @@ def upload_page():
                 })
                 st.dataframe(col_types, use_container_width=True)
 
-            # --- Auto‑detect target candidates (displayed directly) ---
+            # Auto‑detect target candidates
             classification_candidates = []
             regression_candidates = []
 
@@ -669,12 +675,10 @@ def upload_page():
                 if dtype in ['object', 'category']:
                     classification_candidates.append(col)
                 elif np.issubdtype(dtype, np.number):
-                    # Numeric columns with few unique values are often categorical
                     if unique_vals < 20:
                         classification_candidates.append(col)
                     else:
                         regression_candidates.append(col)
-                # Ignore other types (e.g., datetime)
 
             st.markdown("### 🎯 Detected Target Candidates")
             col1a, col2a = st.columns(2)
@@ -691,7 +695,10 @@ def upload_page():
                 else:
                     st.write("None detected")
             st.markdown("---")
+        else:
+            st.info("📂 No data loaded yet. Please upload a CSV file.")
 
+    # Right column: target selection and navigation
     with col2:
         if st.session_state.data is not None:
             st.markdown("### 📌 Define Target Column")
@@ -701,17 +708,19 @@ def upload_page():
                 index=len(st.session_state.data.columns)-1
             )
             problem_type = st.selectbox("Select problem type:", ["Classification", "Regression"])
-            # FIXED: button sets target and then navigates
             if st.button("Set Target & Continue", type="primary"):
                 st.session_state.target_column = target_col
                 st.session_state.problem_type = problem_type
                 st.success(f"✅ Target set: {target_col} ({problem_type})")
                 st.session_state.app_page = "🧹 Data Cleaning"
                 st.rerun()
+        else:
+            st.info("Please upload data first.")
 
+    # Bottom: Go to Cleaning button
     st.markdown("---")
-    _, col2, _ = st.columns([1, 2, 1])
-    with col2:
+    _, col2_center, _ = st.columns([1, 2, 1])
+    with col2_center:
         if st.session_state.data is not None and st.session_state.target_column is not None:
             if st.button("➡️ Go to Data Cleaning", type="primary", use_container_width=True):
                 st.session_state.app_page = "🧹 Data Cleaning"
@@ -719,7 +728,7 @@ def upload_page():
         else:
             st.button("➡️ Go to Data Cleaning (set target first)", disabled=True, use_container_width=True)
 
-# ---------- Cleaning page (basic cleaning, no encoding/scaling) ----------
+# ---------- Cleaning page ----------
 def cleaning_page():
     # Redirect if no data or target
     if st.session_state.data is None or st.session_state.target_column is None:
@@ -925,7 +934,6 @@ def training_page():
         st.error(f"Target column '{target_col}' contains missing values. Please handle them in Data Cleaning.")
         return
 
-    # Validate target column for regression
     if problem_type == "Regression":
         if not pd.api.types.is_numeric_dtype(df[target_col]):
             st.error(
@@ -938,7 +946,6 @@ def training_page():
             st.error("❌ Target column contains infinite values. Please remove or replace them.")
             return
 
-    # Warn about infinite values in numeric features
     numeric_cols = df.select_dtypes(include=[np.number]).columns
     for col in numeric_cols:
         if np.isinf(df[col]).any():
@@ -1006,13 +1013,15 @@ def training_page():
         df = df.sample(frac=sample_frac, random_state=random_state).reset_index(drop=True)
         st.info(f"Using {len(df)} rows after sampling (original: {st.session_state.data.shape[0]} rows).")
 
+    # Track if training has been performed
+    if "training_done" not in st.session_state:
+        st.session_state.training_done = False
+
     if st.button("🚀 Start Automated Training", type="primary", use_container_width=True):
         with st.spinner(f"🧠 PyCaret is training {len(allowed_models)} models with {fold}-fold CV..."):
-            # Show a toast (optional)
             st.toast("Training started...")
 
             try:
-                # ---------- Prepare setup arguments ----------
                 setup_args = {
                     "data": df,
                     "target": target_col,
@@ -1029,14 +1038,12 @@ def training_page():
                 }
 
                 if problem_type == "Classification":
-                    # Recommended PyCaret 3.x parameter for stratified splitting
                     setup_args["data_split_stratify"] = True
                     _pycaret_setup_safe(clf_setup, **setup_args)
                 else:
                     setup_args["data_split_stratify"] = False
                     _pycaret_setup_safe(reg_setup, **setup_args)
 
-                # Verify setup succeeded and save feature names
                 try:
                     X_train = get_config('X_train')
                     st.session_state.feature_names = X_train.columns.tolist()
@@ -1045,7 +1052,6 @@ def training_page():
                     st.exception(e)
                     return
 
-                # Compare models
                 if problem_type == "Classification":
                     best_model = clf_compare(
                         include=allowed_models,
@@ -1061,25 +1067,24 @@ def training_page():
                         sort='R2'
                     )
 
-                # Predict on PyCaret's internal test set
                 if problem_type == "Classification":
                     pred_df = clf_predict(best_model)
                 else:
                     pred_df = reg_predict(best_model)
 
-                # ---------- Safer extraction of predictions ----------
                 if problem_type == "Classification":
                     test_predictions = pred_df.get("prediction_label", pred_df.iloc[:, -1])
                 else:
                     test_predictions = pred_df.get("prediction", pred_df.iloc[:, -1])
                 y_test = pred_df[target_col]
 
-                # Save results
                 st.session_state.predictions = test_predictions.values
                 st.session_state.test_labels = y_test.values
                 st.session_state.model = best_model
                 st.session_state.training_complete = True
+                st.session_state.training_done = True
 
+                # Display results immediately
                 with st.expander("📊 Training Results (click to expand)", expanded=True):
                     st.markdown("#### 🏆 Best Model")
                     st.code(str(best_model), language='python')
@@ -1115,12 +1120,19 @@ def training_page():
                         st.dataframe(comparison_df.head(10), use_container_width=True)
 
                 st.success("🎉 Model training completed successfully!")
-                st.session_state.app_page = "📈 Model Evaluation"
-                st.rerun()
 
             except Exception as e:
                 st.error(f"❌ Training failed: {type(e).__name__}: {str(e)}")
                 st.exception(e)
+
+    # If training is done, show a button to go to evaluation
+    if st.session_state.training_done:
+        st.markdown("---")
+        _, col2, _ = st.columns([1, 2, 1])
+        with col2:
+            if st.button("➡️ Go to Model Evaluation", type="primary", use_container_width=True):
+                st.session_state.app_page = "📈 Model Evaluation"
+                st.rerun()
 
 # ---------- Evaluation page ----------
 def evaluation_page():
@@ -1168,7 +1180,6 @@ def evaluation_page():
                     }).sort_values('Importance', ascending=False)
                     st.dataframe(imp_df, use_container_width=True)
 
-                    # Bar chart for top 15 features
                     fig = px.bar(imp_df.head(15), x='Importance', y='Feature',
                                  orientation='h', title="Top 15 Feature Importance")
                     fig.update_layout(yaxis={'categoryorder': 'total ascending'})
@@ -1214,7 +1225,6 @@ def evaluation_page():
             st.metric("Recall (weighted)", f"{rec:.4f}")
             st.metric("F1 Score (weighted)", f"{f1:.4f}")
 
-        # Confusion matrix
         try:
             cm = confusion_matrix(y_test, predictions)
             fig = px.imshow(cm, text_auto=True, aspect="auto",
@@ -1224,7 +1234,6 @@ def evaluation_page():
         except Exception as e:
             st.error(f"Could not generate confusion matrix: {e}")
 
-        # Classification report
         try:
             report = classification_report(y_test, predictions, output_dict=True, zero_division=0)
             report_df = pd.DataFrame(report).transpose()
@@ -1247,7 +1256,6 @@ def evaluation_page():
             else:
                 st.metric("MAPE (%)", "N/A (zero values present)")
 
-        # Residuals plot
         residuals = y_test - predictions
         fig = px.scatter(x=predictions, y=residuals,
                          labels={'x': 'Predicted Values', 'y': 'Residuals'},
@@ -1255,7 +1263,6 @@ def evaluation_page():
         fig.add_hline(y=0, line_dash="dash", line_color="red")
         st.plotly_chart(fig, use_container_width=True)
 
-        # Actual vs Predicted
         fig = px.scatter(x=y_test, y=predictions,
                          labels={'x': 'Actual', 'y': 'Predicted'},
                          title="Actual vs Predicted")
@@ -1264,7 +1271,6 @@ def evaluation_page():
                                  mode='lines', name='Ideal', line=dict(dash='dash', color='red')))
         st.plotly_chart(fig, use_container_width=True)
 
-    # --- Button to go to Export Results ---
     st.markdown("---")
     _, col2, _ = st.columns([1, 2, 1])
     with col2:
@@ -1283,14 +1289,11 @@ def export_page():
 
     st.markdown('<h2 class="sub-header">💾 Export Model and Results</h2>', unsafe_allow_html=True)
 
-    # --- Export options ---
     col1, col2 = st.columns(2)
     with col1:
         st.markdown("#### 📊 Model Information")
         if st.button("Show Model Details"):
             st.write("**Best Model:**", st.session_state.model)
-
-        # Removed the "Download Model (pickle)" button
 
     with col2:
         st.markdown("#### 📥 Download Predictions")
@@ -1309,7 +1312,6 @@ def export_page():
         else:
             st.warning("No predictions available. Please retrain the model.")
 
-    # --- Model report generation ---
     st.markdown("#### 📄 Model Report")
     if st.button("Generate Model Report"):
         if st.session_state.data is not None:
@@ -1370,10 +1372,10 @@ This model was generated using PyCaret AutoML through the No-Code ML Platform.
     _, col2, _ = st.columns([1, 2, 1])
     with col2:
         if st.button("🔄 Start Over (Back to Data Upload)", type="secondary", use_container_width=True):
-            # Reset all relevant session state variables
             keys_to_reset = [
                 "data", "target_column", "problem_type", "model", "predictions",
-                "test_labels", "training_complete", "cleaned_data", "label_encoder", "feature_names"
+                "test_labels", "training_complete", "cleaned_data", "label_encoder", "feature_names",
+                "training_done"
             ]
             for key in keys_to_reset:
                 if key in st.session_state:
@@ -1381,11 +1383,10 @@ This model was generated using PyCaret AutoML through the No-Code ML Platform.
             st.session_state.app_page = "📁 Data Upload"
             st.rerun()
 
-# ---------- Account Page (with change password) ----------
+# ---------- Account Page ----------
 def account_page():
     st.markdown('<h2 class="sub-header">👤 Account Settings</h2>', unsafe_allow_html=True)
 
-    # Display current account information
     st.markdown("### Your Profile")
     st.write(f"**Name:** {st.session_state.user_name}")
     st.write(f"**Email:** {st.session_state.user_email}")
@@ -1407,11 +1408,9 @@ def account_page():
             elif len(new_password) < 6:
                 st.error("New password must be at least 6 characters.")
             else:
-                # Check if Supabase is connected
                 if st.session_state.supabase is None:
                     st.error("Supabase connection is not available. Cannot update password.")
                 else:
-                    # Fetch current user from Supabase to verify password
                     try:
                         response = st.session_state.supabase.table("users").select("*").eq("email", st.session_state.user_email).execute()
                         if len(response.data) == 0:
@@ -1420,9 +1419,7 @@ def account_page():
                             user = response.data[0]
                             stored_hash = user.get("password", "")
                             if verify_password(current_password, stored_hash):
-                                # Hash the new password
                                 new_hash = hash_password(new_password)
-                                # Update the password in Supabase
                                 st.session_state.supabase.table("users").update({"password": new_hash}).eq("email", st.session_state.user_email).execute()
                                 st.success("Password updated successfully!")
                             else:
@@ -1453,7 +1450,6 @@ def dashboard_page():
 
     st.markdown(f"<h1 style='color: black;'>Welcome, {st.session_state.user_name}!</h1>", unsafe_allow_html=True)
 
-    # --- Sidebar with steps that always reflect the current page ---
     app_page_options = [
         "👤 Account",
         "📁 Data Upload",
@@ -1475,7 +1471,6 @@ def dashboard_page():
             key="sidebar_radio"
         )
 
-        # When the user clicks a different step, update the page
         if selected != st.session_state.app_page:
             st.session_state.app_page = selected
             st.rerun()
@@ -1488,10 +1483,10 @@ def dashboard_page():
             st.session_state.logged_in = False
             st.session_state.user_name = ""
             st.session_state.user_email = ""
-            # Clear all model-related data
             keys_to_clear = [
                 "data", "target_column", "problem_type", "model", "predictions",
-                "test_labels", "training_complete", "cleaned_data", "label_encoder", "feature_names"
+                "test_labels", "training_complete", "cleaned_data", "label_encoder", "feature_names",
+                "training_done"
             ]
             for key in keys_to_clear:
                 if key in st.session_state:
@@ -1499,7 +1494,7 @@ def dashboard_page():
             go_to("front")
             st.rerun()
 
-    # Page routing based on app_page
+    # Page routing
     if st.session_state.app_page == "👤 Account":
         account_page()
     elif st.session_state.app_page == "📁 Data Upload":
