@@ -14,7 +14,6 @@ from sklearn.metrics import (
     confusion_matrix, classification_report,
     mean_absolute_error, mean_squared_error, r2_score
 )
-from sklearn.model_selection import train_test_split
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -221,6 +220,7 @@ PAGES = {
     "front": "Front Page",
     "login": "Login / Register",
     "dashboard": "Dashboard",
+    "account": "Account",
     "data_upload": "Data Upload",
     "data_cleaning": "Data Cleaning",
     "eda": "Exploratory Data Analysis",
@@ -255,7 +255,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# ---------- Global CSS ----------
+# ---------- Global CSS (sidebar colour preserved) ----------
 st.markdown("""
 <style>
     .main-header { font-size: 2.5rem; color: #1E88E5; text-align: center; padding: 1rem; margin-bottom: 2rem; }
@@ -282,6 +282,14 @@ st.markdown("""
     div.stButton > button:hover, div.stDownloadButton > button:hover {
         transform: scale(1.02) !important;
         box-shadow: 0 4px 12px rgba(33, 150, 243, 0.4) !important;
+    }
+    /* Sidebar background colour (preserved) */
+    section[data-testid="stSidebar"] {
+        background: #ffffe0 !important;
+    }
+    section[data-testid="stSidebar"] .st-emotion-cache-1wrcr25, 
+    section[data-testid="stSidebar"] .st-emotion-cache-16txtl3 {
+        color: black !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -988,6 +996,48 @@ This model was generated using PyCaret AutoML through the No-Code ML Platform.
                 st.session_state[key] = None
         go_to("data_upload")
 
+def account_page():
+    st.markdown('<h2 class="sub-header">👤 Account Settings</h2>', unsafe_allow_html=True)
+    st.markdown("### Your Profile")
+    st.write(f"**Name:** {st.session_state.user_name}")
+    st.write(f"**Email:** {st.session_state.user_email}")
+    st.markdown("---")
+    st.markdown("### Change Password")
+    with st.form("change_password_form"):
+        current_password = st.text_input("Current Password", type="password")
+        new_password = st.text_input("New Password", type="password")
+        confirm_new = st.text_input("Confirm New Password", type="password")
+        submitted = st.form_submit_button("Update Password")
+        if submitted:
+            if not current_password or not new_password or not confirm_new:
+                st.error("Please fill in all fields.")
+            elif new_password != confirm_new:
+                st.error("New passwords do not match.")
+            elif len(new_password) < 6:
+                st.error("New password must be at least 6 characters.")
+            else:
+                if st.session_state.supabase is None:
+                    st.error("Supabase connection is not available. Cannot update password.")
+                else:
+                    try:
+                        response = st.session_state.supabase.table("users").select("*").eq("email", st.session_state.user_email).execute()
+                        if len(response.data) == 0:
+                            st.error("User not found.")
+                        else:
+                            user = response.data[0]
+                            stored_hash = user.get("password", "")
+                            if verify_password(current_password, stored_hash):
+                                new_hash = hash_password(new_password)
+                                st.session_state.supabase.table("users").update({"password": new_hash}).eq("email", st.session_state.user_email).execute()
+                                st.success("Password updated successfully!")
+                            else:
+                                st.error("Current password is incorrect.")
+                    except Exception as e:
+                        st.error(f"Failed to update password: {e}")
+    st.markdown("---")
+    if st.button("← Back to Dashboard", use_container_width=True, key="back_to_dashboard"):
+        go_to("dashboard")
+
 def dashboard_page():
     set_bg_image_local("purple.png")
     st.markdown(f"<h1 style='color: black;'>Welcome, {st.session_state.user_name}!</h1>", unsafe_allow_html=True)
@@ -997,6 +1047,10 @@ def dashboard_page():
         st.image("https://cdn-icons-png.flaticon.com/512/2103/2103832.png", width=100)
         st.markdown(f"**User:** {st.session_state.user_name}")
         st.markdown(f"**Email:** {st.session_state.user_email}")
+        st.markdown("---")
+        # Account button
+        if st.button("👤 Account Settings", key="account_sidebar_btn", use_container_width=True):
+            go_to("account")
         st.markdown("---")
         st.markdown("### Sequential Steps")
         if st.session_state.page in workflow_pages:
@@ -1019,7 +1073,10 @@ def dashboard_page():
                 if key in st.session_state:
                     st.session_state[key] = None
             go_to("front")
-    if st.session_state.page == "data_upload":
+    # Render the appropriate page
+    if st.session_state.page == "account":
+        account_page()
+    elif st.session_state.page == "data_upload":
         upload_page()
     elif st.session_state.page == "data_cleaning":
         cleaning_page()
