@@ -205,11 +205,11 @@ def register_user(email, password, name):
 
 def authenticate_user(email, password):
     if st.session_state.supabase is None:
-        return False, None
+        return False, None, None
     try:
         response = st.session_state.supabase.table("users").select("*").eq("email", email).execute()
         if len(response.data) == 0:
-            return False, None
+            return False, None, None
         user = response.data[0]
         if verify_password(password, user.get("password", "")):
             return True, user["name"], user["email"]
@@ -218,7 +218,22 @@ def authenticate_user(email, password):
         st.error(f"Authentication failed: {e}")
         return False, None, None
 
-# ---------- Page navigation ----------
+# ---------- Page navigation (unified) ----------
+# Define all possible page names
+PAGES = {
+    "front": "Front Page",
+    "login": "Login / Register",
+    "dashboard": "Dashboard",
+    "account": "Account",
+    "data_upload": "Data Upload",
+    "data_cleaning": "Data Cleaning",
+    "eda": "Exploratory Data Analysis",
+    "model_training": "Model Training",
+    "model_evaluation": "Model Evaluation",
+    "export_results": "Export Results"
+}
+
+# Initialize page state
 if "page" not in st.session_state:
     st.session_state.page = "front"
 if "logged_in" not in st.session_state:
@@ -228,8 +243,11 @@ if "user_name" not in st.session_state:
 if "user_email" not in st.session_state:
     st.session_state.user_email = ""
 
-def go_to(page):
-    st.session_state.page = page
+def go_to(page: str):
+    """Unified navigation function."""
+    if st.session_state.page != page:
+        st.session_state.page = page
+        st.rerun()
 
 # ---------- Page configuration ----------
 st.set_page_config(
@@ -310,18 +328,18 @@ if "test_labels" not in st.session_state:
     st.session_state.test_labels = None
 if "training_complete" not in st.session_state:
     st.session_state.training_complete = False
-if "app_page" not in st.session_state:
-    st.session_state.app_page = "📁 Data Upload"
 if "cleaned_data" not in st.session_state:
     st.session_state.cleaned_data = None
 if "label_encoder" not in st.session_state:
     st.session_state.label_encoder = None
 if "feature_names" not in st.session_state:
     st.session_state.feature_names = None
+if "training_done" not in st.session_state:
+    st.session_state.training_done = False
 
 # ---------- Helper function for cleaning (protects target column) ----------
 def apply_cleaning(df, drop_duplicates, missing_option, outlier_option,
-                   encode_option, scale_option, cols_to_drop, target_col):
+                    encode_option, scale_option, cols_to_drop, target_col):
     cleaned = df.copy()
 
     if drop_duplicates:
@@ -430,7 +448,7 @@ def _pycaret_setup_safe(setup_fn, **kwargs):
                 return _pycaret_setup_safe(setup_fn, **kwargs)
         raise
 
-# ---------- Dashboard subpages ----------
+# ---------- Page functions ----------
 def front_page():
     set_bg_image_local("FrontPage.jpg")
     st.markdown("""
@@ -506,7 +524,6 @@ def front_page():
         st.markdown(right_html, unsafe_allow_html=True)
         if st.button("Get Started", key="get_started", use_container_width=True):
             go_to("login")
-            st.rerun()
 
 def login_page():
     set_bg_image_local("login.jpg")
@@ -577,7 +594,6 @@ def login_page():
                         st.session_state.user_name = name
                         st.session_state.user_email = email_ret
                         go_to("dashboard")
-                        st.rerun()
                     else:
                         st.error("Invalid email or password")
 
@@ -603,11 +619,9 @@ def login_page():
         st.markdown('<div class="back-button-container">', unsafe_allow_html=True)
         if st.button("← Back to Home", key="back_home"):
             go_to("front")
-            st.rerun()
         st.markdown('</div>', unsafe_allow_html=True)
         st.markdown('</div>', unsafe_allow_html=True)
 
-# ---------- Upload page (with robust CSV reading) ----------
 def upload_page():
     st.markdown('<h2 class="sub-header">📁 Upload Your Dataset</h2>', unsafe_allow_html=True)
 
@@ -708,12 +722,11 @@ def upload_page():
                 index=len(st.session_state.data.columns)-1
             )
             problem_type = st.selectbox("Select problem type:", ["Classification", "Regression"])
-            if st.button("Set Target & Continue", type="primary"):
+            if st.button("Set Target & Continue", type="primary", key="set_target_continue"):
                 st.session_state.target_column = target_col
                 st.session_state.problem_type = problem_type
                 st.success(f"✅ Target set: {target_col} ({problem_type})")
-                st.session_state.app_page = "🧹 Data Cleaning"
-                st.rerun()
+                go_to("data_cleaning")
         else:
             st.info("Please upload data first.")
 
@@ -722,20 +735,17 @@ def upload_page():
     _, col2_center, _ = st.columns([1, 2, 1])
     with col2_center:
         if st.session_state.data is not None and st.session_state.target_column is not None:
-            if st.button("➡️ Go to Data Cleaning", type="primary", use_container_width=True):
-                st.session_state.app_page = "🧹 Data Cleaning"
-                st.rerun()
+            if st.button("➡️ Go to Data Cleaning", type="primary", use_container_width=True, key="go_to_cleaning_from_upload"):
+                go_to("data_cleaning")
         else:
             st.button("➡️ Go to Data Cleaning (set target first)", disabled=True, use_container_width=True)
 
-# ---------- Cleaning page (with updated button text) ----------
 def cleaning_page():
     # Redirect if no data or target
     if st.session_state.data is None or st.session_state.target_column is None:
         st.warning("⚠️ Please upload data and set target column first.")
-        if st.button("Go to Data Upload"):
-            st.session_state.app_page = "📁 Data Upload"
-            st.rerun()
+        if st.button("Go to Data Upload", key="goto_upload_from_cleaning"):
+            go_to("data_upload")
         return
 
     st.markdown('<h2 class="sub-header">🧹 Basic Data Cleaning</h2>', unsafe_allow_html=True)
@@ -752,19 +762,19 @@ def cleaning_page():
         missing_option = st.selectbox(
             "Handle missing values",
             ["None", "Drop rows with any missing", "Drop columns with any missing",
-             "Fill numeric with mean", "Fill numeric with median", "Fill categorical with mode"]
+                "Fill numeric with mean", "Fill numeric with median", "Fill categorical with mode"]
         )
         outlier_option = st.selectbox(
             "Handle outliers (numerical columns)",
             ["None", "Remove rows with Z-score > 3", "Cap at 1st and 99th percentile"]
         )
         cols_to_drop = st.multiselect("Select columns to drop",
-                                      [c for c in original_df.columns if c != target_col])
+                                        [c for c in original_df.columns if c != target_col])
 
-        if st.button("🔍 Preview Cleaning", type="secondary"):
+        if st.button("🔍 Preview Cleaning", type="secondary", key="preview_cleaning"):
             cleaned = apply_cleaning(original_df, drop_duplicates, missing_option, outlier_option,
-                                     encode_option="None", scale_option="None",
-                                     cols_to_drop=cols_to_drop, target_col=target_col)
+                                        encode_option="None", scale_option="None",
+                                        cols_to_drop=cols_to_drop, target_col=target_col)
             st.markdown("### Cleaned Data Preview")
             st.dataframe(cleaned.head())
             st.markdown(f"Final shape: {cleaned.shape}")
@@ -774,25 +784,22 @@ def cleaning_page():
     _, col2, _ = st.columns([1, 2, 1])
     with col2:
         if st.session_state.cleaned_data is not None:
-            if st.button("✅ Apply Cleaning (preview first)", type="primary", use_container_width=True):
+            if st.button("✅ Apply Cleaning (preview first)", type="primary", use_container_width=True, key="apply_cleaning"):
                 cleaned = apply_cleaning(original_df, drop_duplicates, missing_option, outlier_option,
-                                         encode_option="None", scale_option="None",
-                                         cols_to_drop=cols_to_drop, target_col=target_col)
+                                            encode_option="None", scale_option="None",
+                                            cols_to_drop=cols_to_drop, target_col=target_col)
                 st.session_state.data = cleaned
                 st.session_state.cleaned_data = None
                 st.success("Data cleaned successfully!")
-                st.session_state.app_page = "🔍 Exploratory Data Analysis"
-                st.rerun()
+                go_to("eda")
         else:
             st.button("✅ Apply Cleaning (preview first)", disabled=True, use_container_width=True)
 
-# ---------- EDA page ----------
 def eda_page():
     if st.session_state.data is None or st.session_state.target_column is None:
         st.warning("⚠️ Please upload data and set target column first.")
-        if st.button("Go to Data Upload"):
-            st.session_state.app_page = "📁 Data Upload"
-            st.rerun()
+        if st.button("Go to Data Upload", key="goto_upload_from_eda"):
+            go_to("data_upload")
         return
 
     st.markdown('<h2 class="sub-header">🔍 Exploratory Data Analysis</h2>', unsafe_allow_html=True)
@@ -897,28 +904,24 @@ def eda_page():
     _, col2, _ = st.columns([1, 2, 1])
     with col2:
         if st.session_state.target_column is not None:
-            if st.button("➡️ Go to Model Training", type="primary", use_container_width=True):
-                st.session_state.app_page = "📐 Model Training"
-                st.rerun()
+            if st.button("➡️ Go to Model Training", type="primary", use_container_width=True, key="go_to_training"):
+                go_to("model_training")
         else:
             st.button("➡️ Go to Model Training (set target first)", disabled=True, use_container_width=True)
 
-# ---------- Training page (PyCaret handles preprocessing and split) ----------
 def training_page():
     if st.session_state.data is None or st.session_state.target_column is None:
         st.warning("⚠️ Please upload data and set target column first.")
-        if st.button("Go to Data Upload"):
-            st.session_state.app_page = "📁 Data Upload"
-            st.rerun()
+        if st.button("Go to Data Upload", key="goto_upload_from_training"):
+            go_to("data_upload")
         return
 
     st.markdown('<h2 class="sub-header">📐 Automated Model Training (PyCaret)</h2>', unsafe_allow_html=True)
 
     if not PYCARET_AVAILABLE:
         st.error("⚠️ PyCaret not installed. Install with `pip install pycaret` to use AutoML.")
-        if st.button("Go to Data Upload"):
-            st.session_state.app_page = "📁 Data Upload"
-            st.rerun()
+        if st.button("Go to Data Upload", key="goto_upload_no_pycaret"):
+            go_to("data_upload")
         return
 
     df = st.session_state.data.copy()
@@ -1017,7 +1020,7 @@ def training_page():
     if "training_done" not in st.session_state:
         st.session_state.training_done = False
 
-    if st.button("🚀 Start Automated Training", type="primary", use_container_width=True):
+    if st.button("🚀 Start Automated Training", type="primary", use_container_width=True, key="start_training"):
         with st.spinner(f"🧠 PyCaret is training {len(allowed_models)} models with {fold}-fold CV..."):
             st.toast("Training started...")
 
@@ -1072,10 +1075,11 @@ def training_page():
                 else:
                     pred_df = reg_predict(best_model)
 
+                # Extract predictions and test labels
                 if problem_type == "Classification":
                     test_predictions = pred_df.get("prediction_label", pred_df.iloc[:, -1])
                 else:
-                    test_predictions = pred_df.get("prediction", pred_df.iloc[:, -1])
+                    test_predictions = pred_df.get("prediction_label", pred_df.iloc[:, -1])  # regression also uses "prediction_label" in newer PyCaret
                 y_test = pred_df[target_col]
 
                 st.session_state.predictions = test_predictions.values
@@ -1130,26 +1134,22 @@ def training_page():
         st.markdown("---")
         _, col2, _ = st.columns([1, 2, 1])
         with col2:
-            if st.button("➡️ Go to Model Evaluation", type="primary", use_container_width=True):
-                st.session_state.app_page = "📈 Model Evaluation"
-                st.rerun()
+            if st.button("➡️ Go to Model Evaluation", type="primary", use_container_width=True, key="go_to_evaluation"):
+                go_to("model_evaluation")
 
-# ---------- Evaluation page ----------
 def evaluation_page():
     if not st.session_state.training_complete or st.session_state.model is None:
         st.warning("⚠️ No trained model found. Please go to 'Model Training' and train a model first.")
-        if st.button("Go to Model Training"):
-            st.session_state.app_page = "📐 Model Training"
-            st.rerun()
+        if st.button("Go to Model Training", key="goto_training_from_eval"):
+            go_to("model_training")
         return
 
     st.markdown('<h2 class="sub-header">📈 Model Performance Evaluation</h2>', unsafe_allow_html=True)
 
     if st.session_state.predictions is None or st.session_state.test_labels is None:
         st.error("❌ Model predictions or test labels missing. Please retrain the model.")
-        if st.button("Retrain Model"):
-            st.session_state.app_page = "📐 Model Training"
-            st.rerun()
+        if st.button("Retrain Model", key="retrain_from_eval"):
+            go_to("model_training")
         return
 
     model = st.session_state.model
@@ -1274,17 +1274,14 @@ def evaluation_page():
     st.markdown("---")
     _, col2, _ = st.columns([1, 2, 1])
     with col2:
-        if st.button("📤 Go to Export Results", type="primary", use_container_width=True):
-            st.session_state.app_page = "💾 Export Results"
-            st.rerun()
+        if st.button("📤 Go to Export Results", type="primary", use_container_width=True, key="go_to_export"):
+            go_to("export_results")
 
-# ---------- Export page ----------
 def export_page():
     if not st.session_state.training_complete:
         st.warning("⚠️ Please train a model first to export results.")
-        if st.button("Go to Model Training"):
-            st.session_state.app_page = "📐 Model Training"
-            st.rerun()
+        if st.button("Go to Model Training", key="goto_training_from_export"):
+            go_to("model_training")
         return
 
     st.markdown('<h2 class="sub-header">💾 Export Model and Results</h2>', unsafe_allow_html=True)
@@ -1292,7 +1289,7 @@ def export_page():
     col1, col2 = st.columns(2)
     with col1:
         st.markdown("#### 📊 Model Information")
-        if st.button("Show Model Details"):
+        if st.button("Show Model Details", key="show_model_details"):
             st.write("**Best Model:**", st.session_state.model)
 
     with col2:
@@ -1313,7 +1310,7 @@ def export_page():
             st.warning("No predictions available. Please retrain the model.")
 
     st.markdown("#### 📄 Model Report")
-    if st.button("Generate Model Report"):
+    if st.button("Generate Model Report", key="generate_report"):
         if st.session_state.data is not None:
             dataset_shape = st.session_state.data.shape
             feature_count = len(st.session_state.data.columns) - 1
@@ -1347,13 +1344,15 @@ This model was generated using PyCaret AutoML through the No-Code ML Platform.
             "📥 Download Report (PDF)",
             data=pdf_bytes,
             file_name="ml_model_report.pdf",
-            mime="application/pdf"
+            mime="application/pdf",
+            key="download_pdf"
         )
         st.download_button(
             "📥 Download Report (Markdown)",
             data=report_content,
             file_name="ml_model_report.md",
-            mime="text/markdown"
+            mime="text/markdown",
+            key="download_md"
         )
 
     st.markdown("### 📋 Session Information")
@@ -1371,7 +1370,8 @@ This model was generated using PyCaret AutoML through the No-Code ML Platform.
     st.markdown("---")
     _, col2, _ = st.columns([1, 2, 1])
     with col2:
-        if st.button("🔄 Start Over (Back to Data Upload)", type="secondary", use_container_width=True):
+        if st.button("🔄 Start Over (Back to Data Upload)", type="secondary", use_container_width=True, key="start_over"):
+            # Reset all relevant session state keys
             keys_to_reset = [
                 "data", "target_column", "problem_type", "model", "predictions",
                 "test_labels", "training_complete", "cleaned_data", "label_encoder", "feature_names",
@@ -1380,10 +1380,8 @@ This model was generated using PyCaret AutoML through the No-Code ML Platform.
             for key in keys_to_reset:
                 if key in st.session_state:
                     st.session_state[key] = None
-            st.session_state.app_page = "📁 Data Upload"
-            st.rerun()
+            go_to("data_upload")
 
-# ---------- Account Page ----------
 def account_page():
     st.markdown('<h2 class="sub-header">👤 Account Settings</h2>', unsafe_allow_html=True)
 
@@ -1428,11 +1426,9 @@ def account_page():
                         st.error(f"Failed to update password: {e}")
 
     st.markdown("---")
-    if st.button("← Back to Dashboard", use_container_width=True):
-        st.session_state.app_page = "📁 Data Upload"
-        st.rerun()
+    if st.button("← Back to Dashboard", use_container_width=True, key="back_to_dashboard"):
+        go_to("dashboard")
 
-# ---------- Dashboard ----------
 def dashboard_page():
     set_bg_image_local("purple.png")
 
@@ -1450,39 +1446,52 @@ def dashboard_page():
 
     st.markdown(f"<h1 style='color: black;'>Welcome, {st.session_state.user_name}!</h1>", unsafe_allow_html=True)
 
-    app_page_options = [
-        "👤 Account",
-        "📁 Data Upload",
-        "🧹 Data Cleaning",
-        "🔍 Exploratory Data Analysis",
-        "📐 Model Training",
-        "📈 Model Evaluation",
-        "💾 Export Results"
+    # Define sub-pages in order
+    sub_pages = [
+        "account",
+        "data_upload",
+        "data_cleaning",
+        "eda",
+        "model_training",
+        "model_evaluation",
+        "export_results"
     ]
+    # Display names for radio
+    page_display = {
+        "account": "👤 Account",
+        "data_upload": "📁 Data Upload",
+        "data_cleaning": "🧹 Data Cleaning",
+        "eda": "🔍 Exploratory Data Analysis",
+        "model_training": "📐 Model Training",
+        "model_evaluation": "📈 Model Evaluation",
+        "export_results": "💾 Export Results"
+    }
 
     with st.sidebar:
         st.image("https://cdn-icons-png.flaticon.com/512/2103/2103832.png", width=100)
 
         st.markdown("### Sequential Steps")
-        selected = st.radio(
+        selected_display = st.radio(
             "Select a step:",
-            app_page_options,
-            index=app_page_options.index(st.session_state.app_page),
+            options=[page_display[p] for p in sub_pages],
+            index=sub_pages.index(st.session_state.page) if st.session_state.page in sub_pages else 0,
             key="sidebar_radio"
         )
+        # Map display back to page key
+        selected_page = [p for p, d in page_display.items() if d == selected_display][0]
 
-        if selected != st.session_state.app_page:
-            st.session_state.app_page = selected
-            st.rerun()
+        if selected_page != st.session_state.page:
+            go_to(selected_page)
 
         if not PYCARET_AVAILABLE:
             st.error("⚠️ PyCaret not installed. Install with: `pip install pycaret`")
             st.code("pip install pycaret", language="bash")
 
-        if st.button("👋🏻 Logout", type="primary"):
+        if st.button("👋🏻 Logout", type="primary", key="logout_button"):
             st.session_state.logged_in = False
             st.session_state.user_name = ""
             st.session_state.user_email = ""
+            # Reset all data-related session state
             keys_to_clear = [
                 "data", "target_column", "problem_type", "model", "predictions",
                 "test_labels", "training_complete", "cleaned_data", "label_encoder", "feature_names",
@@ -1492,23 +1501,25 @@ def dashboard_page():
                 if key in st.session_state:
                     st.session_state[key] = None
             go_to("front")
-            st.rerun()
 
-    # Page routing
-    if st.session_state.app_page == "👤 Account":
+    # Render the appropriate sub-page
+    if st.session_state.page == "account":
         account_page()
-    elif st.session_state.app_page == "📁 Data Upload":
+    elif st.session_state.page == "data_upload":
         upload_page()
-    elif st.session_state.app_page == "🧹 Data Cleaning":
+    elif st.session_state.page == "data_cleaning":
         cleaning_page()
-    elif st.session_state.app_page == "🔍 Exploratory Data Analysis":
+    elif st.session_state.page == "eda":
         eda_page()
-    elif st.session_state.app_page == "📐 Model Training":
+    elif st.session_state.page == "model_training":
         training_page()
-    elif st.session_state.app_page == "📈 Model Evaluation":
+    elif st.session_state.page == "model_evaluation":
         evaluation_page()
-    elif st.session_state.app_page == "💾 Export Results":
+    elif st.session_state.page == "export_results":
         export_page()
+    else:
+        # fallback
+        upload_page()
 
 # ---------- Main routing ----------
 if st.session_state.page == "front":
@@ -1518,6 +1529,15 @@ elif st.session_state.page == "login":
 elif st.session_state.page == "dashboard":
     if not st.session_state.logged_in:
         go_to("login")
-        st.rerun()
     else:
         dashboard_page()
+else:
+    # If any other page (like data_upload) is set without being logged in, redirect to login
+    if not st.session_state.logged_in and st.session_state.page not in ["front", "login"]:
+        go_to("login")
+    else:
+        # This case should not happen normally, but fallback to dashboard if logged in
+        if st.session_state.logged_in:
+            dashboard_page()
+        else:
+            front_page()
