@@ -21,9 +21,7 @@ from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 from sklearn.cluster import KMeans, AgglomerativeClustering, DBSCAN, Birch
 from sklearn.decomposition import PCA
 
-# ---------- Optional warning control (removed global 'ignore') ----------
-# We now let warnings appear – they can be helpful for debugging.
-# If you want to suppress a specific category, do it explicitly.
+# ---------- Optional warning control (warnings are allowed for debugging) ----------
 
 # ---------- Supabase import with fallback ----------
 try:
@@ -43,7 +41,7 @@ except ImportError:
     PYCARET_AVAILABLE = False
     st.warning("⚠️ PyCaret not installed. Classification/Regression will use scikit-learn fallback.")
 
-# ---------- Scipy for outlier detection ----------
+# ---------- Scipy for outlier detection (not used after cleaning removal, but kept for completeness) ----------
 try:
     import scipy.stats as stats
     SCIPY_AVAILABLE = True
@@ -183,11 +181,10 @@ def verify_password(plain_password: str, stored_password: str) -> bool:
             salt = base64.b64decode(salt_b64.encode("utf-8"))
             expected_hash = base64.b64decode(hash_b64.encode("utf-8"))
             candidate_hash = hashlib.pbkdf2_hmac("sha256", plain_password.encode("utf-8"), salt, iterations)
-            # Constant-time comparison
             return hmac.compare_digest(candidate_hash, expected_hash)
         except Exception:
             return False
-    # Fallback for plaintext (not recommended, but kept for backward compatibility)
+    # Fallback for plaintext (not recommended, kept for backward compatibility)
     return hmac.compare_digest(plain_password, stored_password)
 
 # ---------- Supabase client (only if available) ----------
@@ -249,6 +246,7 @@ def reset_ml_state():
         "cluster_metrics": None,
         "clustering_model": None,
         "clustering_scaler": None,
+        "clustering_X_scaled": None,   # Added to store scaled data for clustering
     }
     for k, v in defaults.items():
         st.session_state[k] = v
@@ -275,7 +273,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# ---------- CSS (version‑specific selectors may break; kept as is) ----------
+# ---------- CSS styling ----------
 st.markdown("""
 <style>
     .main-header { font-size: 2.5rem; color: #1E88E5; text-align: center; padding: 1rem; margin-bottom: 2rem; }
@@ -313,104 +311,20 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# ---------- Session state initialisation (already done by reset_ml_state but we call it once) ----------
+# ---------- Session state initialisation (already done by reset_ml_state) ----------
 if "data" not in st.session_state:
     reset_ml_state()
 
-# ---------- Cleaning helper ----------
-def apply_cleaning(df, drop_duplicates, missing_option, outlier_option,
-                    encode_option, scale_option, cols_to_drop, target_col):
-    cleaned = df.copy()
-    if drop_duplicates:
-        cleaned = cleaned.drop_duplicates()
-    if missing_option != "None":
-        if missing_option == "Drop rows with any missing":
-            cleaned = cleaned.dropna()
-        elif missing_option == "Drop columns with any missing":
-            cols_with_na = cleaned.columns[cleaned.isnull().any()].tolist()
-            cols_to_drop_na = [c for c in cols_with_na if c != target_col]
-            cleaned = cleaned.drop(columns=cols_to_drop_na, errors='ignore')
-        elif missing_option == "Fill numeric with mean":
-            num_cols = cleaned.select_dtypes(include=[np.number]).columns
-            for col in num_cols:
-                if col != target_col:
-                    cleaned[col] = cleaned[col].fillna(cleaned[col].mean())
-        elif missing_option == "Fill numeric with median":
-            num_cols = cleaned.select_dtypes(include=[np.number]).columns
-            for col in num_cols:
-                if col != target_col:
-                    cleaned[col] = cleaned[col].fillna(cleaned[col].median())
-        elif missing_option == "Fill categorical with mode":
-            cat_cols = cleaned.select_dtypes(include=['object']).columns
-            for col in cat_cols:
-                if col != target_col:
-                    cleaned[col] = cleaned[col].fillna(cleaned[col].mode()[0] if not cleaned[col].mode().empty else "Unknown")
-    if outlier_option != "None" and SCIPY_AVAILABLE:
-        num_cols = cleaned.select_dtypes(include=[np.number]).columns
-        num_cols = [c for c in num_cols if c != target_col]
-        if outlier_option == "Remove rows with Z-score > 3":
-            if len(num_cols) > 0:
-                numeric_subset = cleaned[num_cols].dropna()
-                if not numeric_subset.empty:
-                    z_scores = np.abs(stats.zscore(numeric_subset, nan_policy='omit'))
-                    if np.ndim(z_scores) == 1:
-                        z_scores = z_scores.reshape(-1, 1)
-                    outlier_rows = (z_scores > 3).any(axis=1)
-                    outlier_idx = numeric_subset.index[outlier_rows]
-                    cleaned = cleaned.drop(index=outlier_idx)
-        elif outlier_option == "Cap at 1st and 99th percentile":
-            for col in num_cols:
-                q1 = cleaned[col].quantile(0.01)
-                q99 = cleaned[col].quantile(0.99)
-                cleaned[col] = cleaned[col].clip(lower=q1, upper=q99)
-    elif outlier_option != "None" and not SCIPY_AVAILABLE:
-        st.warning("Scipy not installed. Z‑score outlier detection disabled.")
-    if encode_option != "None":
-        cat_cols = cleaned.select_dtypes(include=['object']).columns
-        cat_cols = [c for c in cat_cols if c != target_col]
-        if len(cat_cols) > 0:
-            if encode_option == "Label Encoding":
-                for col in cat_cols:
-                    le = LabelEncoder()
-                    cleaned[col] = le.fit_transform(cleaned[col].astype(str))
-            elif encode_option == "One-Hot Encoding":
-                cleaned = pd.get_dummies(cleaned, columns=cat_cols, drop_first=True)
-    if scale_option != "None":
-        num_cols = cleaned.select_dtypes(include=[np.number]).columns
-        num_cols = [c for c in num_cols if c != target_col]
-        if len(num_cols) > 0:
-            if scale_option == "Standardization (z-score)":
-                scaler = StandardScaler()
-                cleaned[num_cols] = scaler.fit_transform(cleaned[num_cols])
-            elif scale_option == "Normalization (min-max)":
-                scaler = MinMaxScaler()
-                cleaned[num_cols] = scaler.fit_transform(cleaned[num_cols])
-    if cols_to_drop:
-        cleaned = cleaned.drop(columns=cols_to_drop, errors='ignore')
-    return cleaned
-
-# ---------- Safe PyCaret setup (for classification/regression) ----------
+# ---------- Safe PyCaret setup (non-recursive, using inspect.signature) ----------
+import inspect
 def _pycaret_setup_safe(setup_fn, **kwargs):
-    import inspect
-    try:
-        params = set(inspect.signature(setup_fn).parameters.keys())
-    except Exception:
-        params = set()
-    if params:
-        filtered = {k: v for k, v in kwargs.items() if k in params}
-        return setup_fn(**filtered)
-    try:
-        return setup_fn(**kwargs)
-    except TypeError as e:
-        msg = str(e)
-        if "unexpected keyword argument" in msg:
-            import re
-            m = re.search(r"unexpected keyword argument '([^']+)'", msg)
-            if m:
-                bad = m.group(1)
-                kwargs.pop(bad, None)
-                return _pycaret_setup_safe(setup_fn, **kwargs)
-        raise
+    """
+    Call PyCaret setup() with only the arguments it accepts.
+    Uses inspect.signature to filter out unexpected keyword arguments.
+    """
+    sig = inspect.signature(setup_fn)
+    filtered = {k: v for k, v in kwargs.items() if k in sig.parameters}
+    return setup_fn(**filtered)
 
 # ---------- Task suitability detection ----------
 def is_classification_possible(df) -> Tuple[bool, List[str]]:
@@ -688,7 +602,6 @@ def upload_page():
         last_error = None
         for enc in encodings:
             try:
-                # Reset file pointer before each attempt
                 uploaded_file.seek(0)
                 df = pd.read_csv(uploaded_file, encoding=enc)
                 break
@@ -793,34 +706,6 @@ def upload_page():
             st.dataframe(col_types, width='stretch')
     else:
         st.info("📂 No data loaded yet. Please upload a CSV file.")
-
-def cleaning_page():
-    if st.session_state.data is None:
-        st.warning("⚠️ Please upload data first.")
-        return
-    target_col = st.session_state.target_column
-    st.markdown('<h2 class="sub-header">🧹 Basic Data Cleaning</h2>', unsafe_allow_html=True)
-    original_df = st.session_state.data
-    st.markdown("### Original Data Preview")
-    st.dataframe(original_df.head(), width='stretch')
-    st.markdown(f"Shape: {original_df.shape}")
-    with st.expander("Basic Cleaning Options", expanded=True):
-        drop_duplicates = st.checkbox("Drop duplicate rows")
-        missing_option = st.selectbox("Handle missing values", ["None", "Drop rows with any missing", "Drop columns with any missing", "Fill numeric with mean", "Fill numeric with median", "Fill categorical with mode"])
-        outlier_option = st.selectbox("Handle outliers (numerical columns)", ["None", "Remove rows with Z-score > 3", "Cap at 1st and 99th percentile"])
-        cols_to_drop = st.multiselect("Select columns to drop", [c for c in original_df.columns if c != target_col] if target_col else original_df.columns.tolist())
-        if st.button("🔍 Preview Cleaning", type="secondary", key="preview_cleaning"):
-            cleaned = apply_cleaning(original_df, drop_duplicates, missing_option, outlier_option, encode_option="None", scale_option="None", cols_to_drop=cols_to_drop, target_col=target_col)
-            st.markdown("### Cleaned Data Preview")
-            st.dataframe(cleaned.head(), width='stretch')
-            st.markdown(f"Final shape: {cleaned.shape}")
-            st.session_state.cleaned_data = cleaned
-    if st.session_state.cleaned_data is not None:
-        if st.button("✅ Apply Cleaning", type="primary", key="apply_cleaning"):
-            cleaned = apply_cleaning(original_df, drop_duplicates, missing_option, outlier_option, encode_option="None", scale_option="None", cols_to_drop=cols_to_drop, target_col=target_col)
-            st.session_state.data = cleaned
-            st.session_state.cleaned_data = None
-            st.success("Data cleaned successfully!")
 
 def eda_page():
     if st.session_state.data is None:
@@ -953,7 +838,6 @@ def clustering_training_page():
                     skip_birch = False
                     skip_dbscan = False
                 
-                # Call modified auto_clustering with skip flags
                 model, labels, algo_name, score, metrics, scaler, X_scaled = auto_clustering(
                     numeric_df, 
                     max_clusters=max_clusters,
@@ -976,6 +860,7 @@ def clustering_training_page():
                     "cluster_sizes": metrics["cluster_sizes"]
                 }
                 st.session_state.clustering_scaler = scaler
+                st.session_state.clustering_X_scaled = X_scaled   # Save scaled data for evaluation
                 st.success(f"🎉 AutoML completed! Best algorithm: {algo_name} (Silhouette = {score:.4f})")
                 
                 with st.expander("📊 Clustering Results", expanded=True):
@@ -1068,6 +953,7 @@ def training_page():
                         sort_metric = 'Accuracy' if problem_type == 'Classification' else 'R2'
                         
                         # Setup with auto-preprocess (let PyCaret handle everything)
+                        # Note: fold is NOT passed to setup; it's only for compare_models
                         setup_args = {
                             "data": df,
                             "target": target_col,
@@ -1075,7 +961,6 @@ def training_page():
                             "session_id": 42,
                             "verbose": False,
                             "log_experiment": False,
-                            "fold": fold,
                             "n_jobs": -1,
                             "html": False,
                             "preprocess": True,   # Auto preprocessing: impute, encode, scale
@@ -1084,10 +969,10 @@ def training_page():
                         if problem_type == "Classification":
                             _pycaret_setup_safe(clf_setup, **setup_args)
                             best_model = clf_compare(verbose=False, sort=sort_metric, include=include_models, n_select=1, fold=fold)
-                            # Unpack if list
+                            # Handle case where compare_models returns None or empty list
+                            if best_model is None or (isinstance(best_model, list) and len(best_model) == 0):
+                                raise ValueError("compare_models returned no model")
                             if isinstance(best_model, list):
-                                if len(best_model) == 0:
-                                    raise ValueError("compare_models returned empty list")
                                 best_model = best_model[0]
                             pred_df = clf_predict(best_model)
                             preds = pred_df['prediction_label'].values
@@ -1096,9 +981,9 @@ def training_page():
                         else:  # Regression
                             _pycaret_setup_safe(reg_setup, **setup_args)
                             best_model = reg_compare(verbose=False, sort=sort_metric, include=include_models, n_select=1, fold=fold)
+                            if best_model is None or (isinstance(best_model, list) and len(best_model) == 0):
+                                raise ValueError("compare_models returned no model")
                             if isinstance(best_model, list):
-                                if len(best_model) == 0:
-                                    raise ValueError("compare_models returned empty list")
                                 best_model = best_model[0]
                             pred_df = reg_predict(best_model)
                             preds = pred_df['prediction_label'].values
@@ -1146,12 +1031,24 @@ def evaluation_page():
         if numeric_df.shape[1] < 2:
             st.info("Not enough numeric columns for clustering metrics.")
         else:
-            scaler = st.session_state.get("clustering_scaler")
-            if scaler is not None:
-                X_scaled = scaler.transform(numeric_df)
+            # Use saved scaled data if available, otherwise recompute
+            X_scaled = st.session_state.get("clustering_X_scaled")
+            if X_scaled is not None:
+                # Ensure shape matches number of rows
+                if len(X_scaled) != len(numeric_df):
+                    st.warning("Saved scaled data length mismatch. Recomputing...")
+                    scaler = st.session_state.get("clustering_scaler")
+                    if scaler is not None:
+                        X_scaled = scaler.transform(numeric_df)
+                    else:
+                        X_scaled = numeric_df.values
             else:
-                st.warning("Scaler not found, recomputing metrics on raw data (may be inaccurate).")
-                X_scaled = numeric_df.values
+                scaler = st.session_state.get("clustering_scaler")
+                if scaler is not None:
+                    X_scaled = scaler.transform(numeric_df)
+                else:
+                    st.warning("Scaler not found, using raw data (may be inaccurate).")
+                    X_scaled = numeric_df.values
             
             sil = silhouette_score(X_scaled, labels)
             ch = calinski_harabasz_score(X_scaled, labels)
@@ -1175,14 +1072,16 @@ def evaluation_page():
         st.plotly_chart(fig, use_container_width=True)
         
         if numeric_df.shape[1] >= 2:
-            # Use scaled data for PCA if available
-            scaler = st.session_state.get("clustering_scaler")
-            if scaler is not None:
-                X_for_pca = scaler.transform(numeric_df)
-            else:
-                X_for_pca = numeric_df.values
+            # Use saved scaled data for PCA if available
+            X_scaled = st.session_state.get("clustering_X_scaled")
+            if X_scaled is None:
+                scaler = st.session_state.get("clustering_scaler")
+                if scaler is not None:
+                    X_scaled = scaler.transform(numeric_df)
+                else:
+                    X_scaled = numeric_df.values
             pca = PCA(n_components=2)
-            pca_result = pca.fit_transform(X_for_pca)
+            pca_result = pca.fit_transform(X_scaled)
             pca_df = pd.DataFrame(pca_result, columns=['PC1','PC2'])
             pca_df['Cluster'] = labels.astype(str)
             fig2 = px.scatter(pca_df, x='PC1', y='PC2', color='Cluster', title="PCA Projection")
@@ -1336,10 +1235,10 @@ def account_page():
 def dashboard_page():
     set_bg_image_local("purple.png")
     st.markdown(f"<h1 style='color: black;'>Welcome, {st.session_state.user_name}!</h1>", unsafe_allow_html=True)
-    workflow_pages = ["data_upload", "data_cleaning", "eda", "model_training", "model_evaluation", "export_results", "account"]
+    # Removed "data_cleaning" from workflow
+    workflow_pages = ["data_upload", "eda", "model_training", "model_evaluation", "export_results", "account"]
     page_display = {
         "data_upload": "📁 Data Upload",
-        "data_cleaning": "🧹 Data Cleaning",
         "eda": "🔍 Exploratory Data Analysis",
         "model_training": "📐 AutoML Training",
         "model_evaluation": "📈 Model Evaluation",
@@ -1368,8 +1267,6 @@ def dashboard_page():
         account_page()
     elif st.session_state.page == "data_upload":
         upload_page()
-    elif st.session_state.page == "data_cleaning":
-        cleaning_page()
     elif st.session_state.page == "eda":
         eda_page()
     elif st.session_state.page == "model_training":
