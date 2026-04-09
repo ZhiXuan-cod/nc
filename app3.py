@@ -895,6 +895,7 @@ def eda_page():
                 st.plotly_chart(fig, use_container_width=True)
 
 def clustering_training_page():
+    """Clustering training page with user-selectable search scope."""
     if st.session_state.data is None:
         st.warning("⚠️ Please upload data first.")
         return
@@ -904,20 +905,54 @@ def clustering_training_page():
     if numeric_df.shape[1] < 2:
         st.error("Clustering requires at least 2 numeric features. Current numeric features insufficient.")
         return
+    
+    # Speed mode selection
+    cluster_mode = st.radio(
+        "⚡ Clustering Search Mode",
+        options=["Fast (KMeans only, k≤5)", "Standard (KMeans + Hierarchical)", "Full (try all algorithms)"],
+        index=1,
+        help="Fast: a few seconds. Standard: includes KMeans and Agglomerative. Full: also BIRCH and DBSCAN (slower)."
+    )
+    
     st.markdown(f"""
     <div class="card">
-    <h4>AutoML Configuration</h4>
+    <h4>AutoClustering Configuration</h4>
     <ul><li><strong>Dataset Shape:</strong> {df.shape}</li>
     <li><strong>Numerical features used:</strong> {numeric_df.shape[1]}</li>
     <li><strong>Unsupervised – no target column</strong></li>
-    <li><strong>Automatically trying:</strong> KMeans (k=2..10), Agglomerative, BIRCH, DBSCAN</li>
-    <li><strong>Selection metric:</strong> Silhouette Score (higher is better)</li></ul>
+    <li><strong>Search Mode:</strong> {cluster_mode}</li></ul>
     </div>
     """, unsafe_allow_html=True)
+    
     if st.button("🚀 Run AutoML Clustering", type="primary"):
         with st.spinner("Automatically searching for best clustering algorithm and parameters..."):
             try:
-                model, labels, algo_name, score, metrics, scaler, X_scaled = auto_clustering(numeric_df, max_clusters=10)
+                # Set flags based on mode
+                if cluster_mode == "Fast (KMeans only, k≤5)":
+                    max_clusters = 5
+                    skip_hierarchical = True
+                    skip_birch = True
+                    skip_dbscan = True
+                elif cluster_mode == "Standard (KMeans + Hierarchical)":
+                    max_clusters = 8
+                    skip_hierarchical = False
+                    skip_birch = True
+                    skip_dbscan = True
+                else:  # Full mode
+                    max_clusters = 10
+                    skip_hierarchical = False
+                    skip_birch = False
+                    skip_dbscan = False
+                
+                # Call modified auto_clustering with skip flags
+                model, labels, algo_name, score, metrics, scaler, X_scaled = auto_clustering(
+                    numeric_df, 
+                    max_clusters=max_clusters,
+                    skip_hierarchical=skip_hierarchical,
+                    skip_birch=skip_birch,
+                    skip_dbscan=skip_dbscan
+                )
+                
                 st.session_state.cluster_labels = labels
                 st.session_state.clustering_model = model
                 st.session_state.training_complete = True
@@ -933,6 +968,7 @@ def clustering_training_page():
                 }
                 st.session_state.clustering_scaler = scaler
                 st.success(f"🎉 AutoML completed! Best algorithm: {algo_name} (Silhouette = {score:.4f})")
+                
                 with st.expander("📊 Clustering Results", expanded=True):
                     st.markdown("#### Best Model")
                     st.code(f"Algorithm: {algo_name}\nNumber of clusters: {metrics['num_clusters']}\nSilhouette Score: {score:.4f}")
@@ -940,7 +976,6 @@ def clustering_training_page():
                     sizes_df = pd.DataFrame(list(metrics["cluster_sizes"].items()), columns=["Cluster", "Count"])
                     fig = px.bar(sizes_df, x="Cluster", y="Count", title="Number of points per cluster")
                     st.plotly_chart(fig, use_container_width=True)
-                    # Use scaled data for PCA visualization (consistent with training)
                     if X_scaled.shape[1] >= 2:
                         pca = PCA(n_components=2)
                         pca_result = pca.fit_transform(X_scaled)
@@ -948,13 +983,12 @@ def clustering_training_page():
                         pca_df['Cluster'] = labels.astype(str)
                         fig2 = px.scatter(pca_df, x='PC1', y='PC2', color='Cluster', title="PCA Projection of Clusters (scaled data)")
                         st.plotly_chart(fig2, use_container_width=True)
-                    else:
-                        st.info("Not enough dimensions for PCA visualization.")
             except Exception as e:
                 st.error(f"AutoML clustering failed: {e}")
                 st.exception(e)
 
 def training_page():
+    """Model training page with user-selectable speed mode."""
     if st.session_state.problem_type == "Clustering":
         clustering_training_page()
         return
@@ -964,9 +998,11 @@ def training_page():
     st.markdown('<h2 class="sub-header">📐 Automated Model Training (AutoML)</h2>', unsafe_allow_html=True)
     if not PYCARET_AVAILABLE:
         st.warning("⚠️ PyCaret not installed. Using scikit-learn fallback (RandomForest). For full AutoML, install PyCaret.")
+    
     df = st.session_state.data.copy()
     target_col = st.session_state.target_column
     problem_type = st.session_state.problem_type
+    
     if target_col not in df.columns:
         st.error(f"❌ Target column '{target_col}' not found.")
         return
@@ -976,38 +1012,81 @@ def training_page():
     if problem_type == "Regression" and not pd.api.types.is_numeric_dtype(df[target_col]):
         st.error(f"Target column '{target_col}' must be numeric for regression.")
         return
+    
+    # ----- User selects training speed mode -----
+    train_mode = st.radio(
+        "⚡ Training Speed Mode",
+        options=["Fast (a few seconds)", "Standard (1-2 minutes)", "Full (slower, best model)"],
+        index=1,
+        help="Fast: RandomForest only, 3-fold CV. Standard: 5 common models, 5-fold. Full: all models, 10-fold."
+    )
+    
     st.markdown(f"""
     <div class="card">
     <h4>AutoML Configuration</h4>
-    <ul><li><strong>Problem Type:</strong> {problem_type}</li><li><strong>Target Column:</strong> {target_col}</li><li><strong>Dataset Shape:</strong> {df.shape}</li></ul>
+    <ul><li><strong>Problem Type:</strong> {problem_type}</li>
+    <li><strong>Target Column:</strong> {target_col}</li>
+    <li><strong>Dataset Shape:</strong> {df.shape}</li>
+    <li><strong>Speed Mode:</strong> {train_mode}</li></ul>
     </div>
     """, unsafe_allow_html=True)
+    
     if st.button("🚀 Run AutoML Training", type="primary"):
         with st.spinner("Automatically training and comparing models..."):
             try:
                 if PYCARET_AVAILABLE:
+                    # Set parameters based on mode
+                    if train_mode == "Fast (a few seconds)":
+                        fold = 3
+                        include_models = ['rf']   # RandomForest only
+                        sort_metric = 'Accuracy' if problem_type == 'Classification' else 'R2'
+                    elif train_mode == "Standard (1-2 minutes)":
+                        fold = 5
+                        if problem_type == "Classification":
+                            include_models = ['lr', 'rf', 'xgboost', 'lightgbm', 'dt']
+                        else:
+                            include_models = ['lr', 'rf', 'lightgbm', 'dt', 'et']
+                        sort_metric = 'Accuracy' if problem_type == 'Classification' else 'R2'
+                    else:  # Full mode
+                        fold = 10
+                        include_models = None  # all models
+                        sort_metric = 'Accuracy' if problem_type == 'Classification' else 'R2'
+                    
+                    # Common setup arguments
+                    setup_args = {
+                        "data": df,
+                        "target": target_col,
+                        "train_size": 0.8,
+                        "session_id": 42,
+                        "verbose": False,
+                        "log_experiment": False,
+                        "fold": fold,
+                        "n_jobs": -1,
+                        "html": False,
+                        "preprocess": False,   # Skip PyCaret's automatic preprocessing
+                    }
+                    
                     if problem_type == "Classification":
-                        setup_args = {"data": df, "target": target_col, "train_size": 0.8, "session_id": 42, "verbose": False, "log_experiment": False}
                         _pycaret_setup_safe(clf_setup, **setup_args)
-                        best_model = clf_compare(verbose=False, sort='Accuracy')
+                        best_model = clf_compare(verbose=False, sort=sort_metric, include=include_models, n_select=1, fold=fold)
                         pred_df = clf_predict(best_model)
                         preds = pred_df['prediction_label'].values
                         y_true = pred_df[target_col].values
-                        # Use classification-specific get_config
                         st.session_state.feature_names = clf_get_config('X_train').columns.tolist()
                     else:  # Regression
-                        setup_args = {"data": df, "target": target_col, "train_size": 0.8, "session_id": 42, "verbose": False, "log_experiment": False}
                         _pycaret_setup_safe(reg_setup, **setup_args)
-                        best_model = reg_compare(verbose=False, sort='R2')
+                        best_model = reg_compare(verbose=False, sort=sort_metric, include=include_models, n_select=1, fold=fold)
                         pred_df = reg_predict(best_model)
                         preds = pred_df['prediction_label'].values
                         y_true = pred_df[target_col].values
-                        # Use regression-specific get_config
                         st.session_state.feature_names = reg_get_config('X_train').columns.tolist()
+                    
                     st.session_state.model = best_model
                 else:
+                    # Fallback: RandomForest, always fast
                     model, preds, y_true = train_fallback_model(df, target_col, problem_type)
                     st.session_state.model = model
+                
                 st.session_state.predictions = preds
                 st.session_state.test_labels = y_true
                 st.session_state.training_complete = True
