@@ -12,27 +12,27 @@ from sklearn.preprocessing import StandardScaler, MinMaxScaler, LabelEncoder
 from sklearn.metrics import (
     accuracy_score, precision_score, recall_score, f1_score,
     confusion_matrix, classification_report,
-    mean_absolute_error, mean_squared_error, r2_score
+    mean_absolute_error, mean_squared_error, r2_score,
+    silhouette_score, calinski_harabasz_score, davies_bouldin_score
 )
 from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
+from sklearn.cluster import KMeans, AgglomerativeClustering, DBSCAN, Birch
+from sklearn.decomposition import PCA
 import warnings
 warnings.filterwarnings('ignore')
 
 # ---------- Supabase import ----------
 from supabase import create_client
 
-# ---------- PyCaret imports ----------
+# ---------- PyCaret imports (optional) ----------
 try:
     from pycaret.classification import setup as clf_setup, compare_models as clf_compare, predict_model as clf_predict, get_config, pull
     from pycaret.regression import setup as reg_setup, compare_models as reg_compare, predict_model as reg_predict
-    from pycaret.clustering import setup as clust_setup, create_model as clust_create, assign_model as clust_assign, pull as clust_pull
     PYCARET_AVAILABLE = True
-    CLUSTERING_AVAILABLE = True
 except ImportError:
     PYCARET_AVAILABLE = False
-    CLUSTERING_AVAILABLE = False
-    st.warning("⚠️ PyCaret not installed. Install with `pip install pycaret` for full AutoML features.")
+    st.warning("⚠️ PyCaret not installed. Classification/Regression will use scikit-learn fallback.")
 
 # ---------- Scipy for outlier detection ----------
 try:
@@ -41,7 +41,7 @@ try:
 except ImportError:
     SCIPY_AVAILABLE = False
 
-# ---------- PDF generator (minimal) ----------
+# ---------- PDF generator ----------
 def _pdf_escape(text: str) -> str:
     return text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
 
@@ -245,7 +245,7 @@ def go_to(page: str):
 st.set_page_config(
     page_title="No-Code ML Platform",
     page_icon="💻",
-    layout="centered",
+    layout="wide",
     initial_sidebar_state="collapsed"
 )
 
@@ -387,7 +387,7 @@ def apply_cleaning(df, drop_duplicates, missing_option, outlier_option,
         cleaned = cleaned.drop(columns=cols_to_drop, errors='ignore')
     return cleaned
 
-# ---------- Safe PyCaret setup ----------
+# ---------- Safe PyCaret setup (for classification/regression) ----------
 def _pycaret_setup_safe(setup_fn, **kwargs):
     import inspect
     try:
@@ -443,18 +443,111 @@ def is_clustering_possible(df, min_rows=10, min_numeric_features=2) -> Tuple[boo
         return False, f"存在常数数值特征: {', '.join(constant_cols[:3])}"
     return True, "适合聚类"
 
-# ---------- Fallback training (if PyCaret missing) ----------
+# ---------- AutoML for Clustering ----------
+def auto_clustering(df, max_clusters=10):
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(df.select_dtypes(include=[np.number]))
+    
+    best_score = -1
+    best_model = None
+    best_labels = None
+    best_name = None
+    results = []
+    
+    # 1. KMeans
+    for k in range(2, min(max_clusters, len(df)-1)+1):
+        km = KMeans(n_clusters=k, random_state=42, n_init=10)
+        labels = km.fit_predict(X_scaled)
+        if len(set(labels)) > 1:
+            score = silhouette_score(X_scaled, labels)
+            results.append(("KMeans", k, score, km, labels))
+            if score > best_score:
+                best_score = score
+                best_model = km
+                best_labels = labels
+                best_name = f"KMeans (k={k})"
+    
+    # 2. Hierarchical
+    for linkage in ['ward', 'complete', 'average']:
+        try:
+            for k in range(2, min(max_clusters, len(df)-1)+1):
+                hc = AgglomerativeClustering(n_clusters=k, linkage=linkage)
+                labels = hc.fit_predict(X_scaled)
+                if len(set(labels)) > 1:
+                    score = silhouette_score(X_scaled, labels)
+                    results.append((f"Agglomerative({linkage})", k, score, hc, labels))
+                    if score > best_score:
+                        best_score = score
+                        best_model = hc
+                        best_labels = labels
+                        best_name = f"Agglomerative (k={k}, linkage={linkage})"
+        except Exception:
+            continue
+    
+    # 3. BIRCH
+    for k in range(2, min(max_clusters, len(df)-1)+1):
+        try:
+            birch = Birch(n_clusters=k)
+            labels = birch.fit_predict(X_scaled)
+            if len(set(labels)) > 1:
+                score = silhouette_score(X_scaled, labels)
+                results.append(("BIRCH", k, score, birch, labels))
+                if score > best_score:
+                    best_score = score
+                    best_model = birch
+                    best_labels = labels
+                    best_name = f"BIRCH (k={k})"
+        except Exception:
+            continue
+    
+    # 4. DBSCAN
+    eps_range = np.linspace(0.1, 1.5, 10)
+    for eps in eps_range:
+        try:
+            db = DBSCAN(eps=eps, min_samples=5)
+            labels = db.fit_predict(X_scaled)
+            n_clusters = len(set(labels)) - (1 if -1 in labels else 0)
+            if n_clusters >= 2:
+                mask = labels != -1
+                if mask.sum() >= 2:
+                    score = silhouette_score(X_scaled[mask], labels[mask])
+                    results.append(("DBSCAN", eps, score, db, labels))
+                    if score > best_score:
+                        best_score = score
+                        best_model = db
+                        best_labels = labels
+                        best_name = f"DBSCAN (eps={eps:.2f})"
+        except Exception:
+            continue
+    
+    if best_model is None:
+        best_model = KMeans(n_clusters=2, random_state=42, n_init=10)
+        best_labels = best_model.fit_predict(X_scaled)
+        best_name = "KMeans (k=2, fallback)"
+        best_score = silhouette_score(X_scaled, best_labels) if len(set(best_labels)) > 1 else 0
+    
+    metrics = {
+        "silhouette": best_score,
+        "calinski_harabasz": calinski_harabasz_score(X_scaled, best_labels) if len(set(best_labels)) > 1 else 0,
+        "davies_bouldin": davies_bouldin_score(X_scaled, best_labels) if len(set(best_labels)) > 1 else 0,
+        "num_clusters": len(set(best_labels)),
+        "algorithm": best_name,
+        "cluster_sizes": pd.Series(best_labels).value_counts().to_dict()
+    }
+    return best_model, best_labels, best_name, best_score, metrics
+
+# ---------- Fallback training ----------
 def train_fallback_model(df, target_col, problem_type):
     X = df.drop(columns=[target_col])
     y = df[target_col]
     X = pd.get_dummies(X, drop_first=True)
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
     if problem_type == "Classification":
-        model = RandomForestClassifier(n_estimators=100, random_state=42)
+        model = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1)
         model.fit(X_train, y_train)
         preds = model.predict(X_test)
     else:
-        model = RandomForestRegressor(n_estimators=100, random_state=42)
+        model = RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)
         model.fit(X_train, y_train)
         preds = model.predict(X_test)
     st.session_state.feature_names = X.columns.tolist()
@@ -555,127 +648,110 @@ def login_page():
 
 def upload_page():
     st.markdown('<h2 class="sub-header">📁 Upload Your Dataset</h2>', unsafe_allow_html=True)
-    col1, col2 = st.columns([2, 1])
-    with col1:
-        st.markdown("""
-        <div class="card">
-        <h4>📁 Supported Data Format</h4>
-        <ul><li>CSV files only (.csv)</li><li>Structured tabular data</li><li>Numerical and categorical variables</li><li>Clear target column for supervised learning (not required for clustering)</li></ul>
-        </div>
-        """, unsafe_allow_html=True)
-        uploaded_file = st.file_uploader("Choose a CSV file", type=['csv'])
-        if uploaded_file is not None:
-            encodings = ['utf-8', 'latin1', 'iso-8859-1', 'cp1252']
-            df = None
-            last_error = None
-            for enc in encodings:
-                try:
-                    df = pd.read_csv(uploaded_file, encoding=enc)
-                    break
-                except UnicodeDecodeError as e:
-                    last_error = e
-                    continue
-                except Exception as e:
-                    st.error(f"Error reading CSV with encoding {enc}: {e}")
-                    last_error = e
-                    continue
-            if df is None:
-                st.error(f"Could not read CSV file. Last error: {last_error}")
-                return
-            st.session_state.data = df
-            st.success(f"✔️ Successfully loaded {len(df)} rows and {len(df.columns)} columns")
-        if st.session_state.data is not None:
-            st.markdown("### Data Preview")
-            st.dataframe(st.session_state.data.head(), use_container_width=True)
-            with st.expander("📊 Basic Data Statistics"):
-                df = st.session_state.data
-                st.write("**Shape:**", df.shape)
-                col_types = pd.DataFrame({'Column': df.columns, 'Type': df.dtypes.astype(str), 'Missing Values': df.isnull().sum(), 'Unique Values': df.nunique()})
-                st.dataframe(col_types, use_container_width=True)
-
-            # 检测可用任务
-            class_possible, class_candidates = is_classification_possible(df)
-            reg_possible, reg_candidates = is_regression_possible(df)
-            clust_possible, clust_msg = is_clustering_possible(df)
-
-            available_tasks = []
-            if class_possible:
-                available_tasks.append("Classification")
-            if reg_possible:
-                available_tasks.append("Regression")
-            if clust_possible:
-                available_tasks.append("Clustering")
-
-            if not available_tasks:
-                st.error("❌ 当前数据不支持任何机器学习任务。请上传其他数据集。")
-                return
-
-            st.markdown("### 🎯 根据数据自动检测到的可用任务")
-            st.info(f"**✅ 可以执行的任务：** {', '.join(available_tasks)}")
-            if not class_possible:
-                st.warning("⚠️ 分类不可用：没有适合作为分类目标的列（类别型或低基数数值列）。")
-            if not reg_possible:
-                st.warning("⚠️ 回归不可用：没有适合作为回归目标的数值列（需要至少一个数值列且唯一值较多）。")
-            if not clust_possible:
-                st.warning(f"⚠️ 聚类不可用：{clust_msg}")
-
-            st.markdown("---")
-            st.markdown("### 📌 请选择任务类型")
-            problem_type = st.selectbox("Select problem type:", available_tasks)
-
-            if problem_type == "Clustering":
-                st.info("Clustering is unsupervised – no target column required.")
-                if st.button("Set Clustering Task", type="primary", key="set_clustering"):
-                    st.session_state.target_column = None
-                    st.session_state.problem_type = "Clustering"
-                    st.success("✅ Clustering task selected. No target column needed.")
+    
+    uploaded_file = st.file_uploader("Choose a CSV file", type=['csv'])
+    if uploaded_file is not None:
+        encodings = ['utf-8', 'latin1', 'iso-8859-1', 'cp1252']
+        df = None
+        last_error = None
+        for enc in encodings:
+            try:
+                df = pd.read_csv(uploaded_file, encoding=enc)
+                break
+            except UnicodeDecodeError as e:
+                last_error = e
+                continue
+            except Exception as e:
+                st.error(f"Error reading CSV with encoding {enc}: {e}")
+                last_error = e
+                continue
+        if df is None:
+            st.error(f"Could not read CSV file. Last error: {last_error}")
+            return
+        st.session_state.data = df
+        st.success(f"✔️ Successfully loaded {len(df)} rows and {len(df.columns)} columns")
+    
+    if st.session_state.data is not None:
+        df = st.session_state.data
+        
+        # 检测任务适用性
+        class_possible, class_candidates = is_classification_possible(df)
+        reg_possible, reg_candidates = is_regression_possible(df)
+        clust_possible, clust_msg = is_clustering_possible(df)
+        
+        available_tasks = []
+        if class_possible:
+            available_tasks.append("Classification")
+        if reg_possible:
+            available_tasks.append("Regression")
+        if clust_possible:
+            available_tasks.append("Clustering")
+        
+        # 🎯 Auto‑detected Task Suggestion
+        st.markdown("### 🎯 Auto‑detected Task Suggestion")
+        if available_tasks:
+            task_badges = "  ".join([f"✅ {task}" for task in available_tasks])
+            st.info(f"**This dataset is suitable for:** {task_badges}")
+        else:
+            st.error("❌ No machine learning task is possible with this dataset. Please upload another CSV.")
+            return
+        
+        # 🔍 Detected Target Candidates
+        st.markdown("### 🔍 Detected Target Candidates")
+        col1a, col2a = st.columns(2)
+        with col1a:
+            st.markdown("**Classification Candidates**")
+            if class_candidates:
+                st.write(", ".join(class_candidates))
             else:
-                if problem_type == "Classification":
-                    candidates = class_candidates
-                else:
-                    candidates = reg_candidates
-                if not candidates:
-                    st.error(f"❌ 尽管 {problem_type} 被检测为可能，但未找到具体候选列。")
+                st.write("None detected")
+        with col2a:
+            st.markdown("**Regression Candidates**")
+            if reg_candidates:
+                st.write(", ".join(reg_candidates))
+            else:
+                st.write("None detected")
+        st.markdown("---")
+        
+        # 📌 Define Problem Type
+        st.markdown("### 📌 Define Problem Type")
+        problem_type = st.selectbox("Select problem type:", available_tasks)
+        
+        if problem_type == "Clustering":
+            st.info("Clustering is unsupervised – no target column required. The system will automatically select the best algorithm and number of clusters.")
+            if st.button("Set Clustering Task", type="primary", key="set_clustering"):
+                st.session_state.target_column = None
+                st.session_state.problem_type = "Clustering"
+                st.success("✅ Clustering task selected. Proceed to Model Training for AutoML.")
+        else:
+            if problem_type == "Classification":
+                candidates = class_candidates
+            else:
+                candidates = reg_candidates
+            if not candidates:
+                st.error(f"❌ No suitable target column found for {problem_type}. Please check your data.")
+                return
+            target_col = st.selectbox(f"Select target column for {problem_type}:", candidates)
+            if st.button("Set Target", type="primary", key="set_target"):
+                if problem_type == "Classification" and df[target_col].nunique() > 50:
+                    st.warning(f"⚠️ Target column '{target_col}' has {df[target_col].nunique()} unique values. Classification may be difficult.")
+                elif problem_type == "Regression" and not np.issubdtype(df[target_col].dtype, np.number):
+                    st.error(f"❌ Target column '{target_col}' is not numeric. Regression requires a numeric target.")
                     return
-                target_col = st.selectbox(f"Select target column for {problem_type}:", candidates)
-                if st.button("Set Target", type="primary", key="set_target"):
-                    if problem_type == "Classification" and df[target_col].nunique() > 50:
-                        st.warning(f"⚠️ 目标列 '{target_col}' 有 {df[target_col].nunique()} 个唯一值，分类效果可能不佳。")
-                    elif problem_type == "Regression" and not np.issubdtype(df[target_col].dtype, np.number):
-                        st.error(f"❌ 目标列 '{target_col}' 不是数值类型，无法进行回归。")
-                        return
-                    st.session_state.target_column = target_col
-                    st.session_state.problem_type = problem_type
-                    st.success(f"✅ Target set: {target_col} ({problem_type})")
-        else:
-            st.info("📂 No data loaded yet. Please upload a CSV file.")
-    with col2:
-        if st.session_state.data is not None:
-            df = st.session_state.data
-            classification_candidates = []
-            regression_candidates = []
-            for col in df.columns:
-                dtype = df[col].dtype
-                unique_vals = df[col].nunique(dropna=False)
-                if dtype in ['object', 'category']:
-                    classification_candidates.append(col)
-                elif np.issubdtype(dtype, np.number):
-                    if unique_vals < 20:
-                        classification_candidates.append(col)
-                    else:
-                        regression_candidates.append(col)
-            st.markdown("### 🔍 检测到的目标候选列（参考）")
-            col1a, col2a = st.columns(2)
-            with col1a:
-                st.markdown("**分类候选**")
-                st.write(", ".join(classification_candidates) if classification_candidates else "无")
-            with col2a:
-                st.markdown("**回归候选**")
-                st.write(", ".join(regression_candidates) if regression_candidates else "无")
-            st.markdown("---")
-            st.caption("💡 聚类要求至少2个数值特征且无常数特征。")
-        else:
-            st.info("请先上传数据。")
+                st.session_state.target_column = target_col
+                st.session_state.problem_type = problem_type
+                st.success(f"✅ Target set: {target_col} ({problem_type})")
+        
+        st.markdown("---")
+        st.markdown("### Data Preview")
+        st.dataframe(df.head(), use_container_width=True)
+        
+        with st.expander("📊 Basic Data Statistics"):
+            st.write("**Shape:**", df.shape)
+            col_types = pd.DataFrame({'Column': df.columns, 'Type': df.dtypes.astype(str), 'Missing Values': df.isnull().sum(), 'Unique Values': df.nunique()})
+            st.dataframe(col_types, use_container_width=True)
+    else:
+        st.info("📂 No data loaded yet. Please upload a CSV file.")
 
 def cleaning_page():
     if st.session_state.data is None:
@@ -790,77 +866,56 @@ def clustering_training_page():
     if st.session_state.data is None:
         st.warning("⚠️ Please upload data first.")
         return
-    if not PYCARET_AVAILABLE or not CLUSTERING_AVAILABLE:
-        st.error("PyCaret clustering module not available. Please install PyCaret (pip install pycaret) and ensure it includes clustering.")
-        return
-    st.markdown('<h2 class="sub-header">🎯 Automated Clustering (Unsupervised)</h2>', unsafe_allow_html=True)
+    st.markdown('<h2 class="sub-header">🎯 Automated Clustering (Unsupervised AutoML)</h2>', unsafe_allow_html=True)
     df = st.session_state.data.copy()
+    numeric_df = df.select_dtypes(include=[np.number])
+    if numeric_df.shape[1] < 2:
+        st.error("聚类需要至少2个数值特征。当前数值特征不足，无法进行聚类。")
+        return
     st.markdown(f"""
     <div class="card">
-    <h4>Clustering Configuration</h4>
-    <ul><li><strong>Dataset Shape:</strong> {df.shape}</li><li><strong>Unsupervised – no target column</strong></li></ul>
+    <h4>AutoML Configuration</h4>
+    <ul><li><strong>Dataset Shape:</strong> {df.shape}</li>
+    <li><strong>Numerical features used:</strong> {numeric_df.shape[1]}</li>
+    <li><strong>Unsupervised – no target column</strong></li>
+    <li><strong>Automatically trying:</strong> KMeans (k=2..10), Agglomerative, BIRCH, DBSCAN</li>
+    <li><strong>Selection metric:</strong> Silhouette Score (higher is better)</li></ul>
     </div>
     """, unsafe_allow_html=True)
-    model_list = ['kmeans', 'hclust', 'dbscan', 'birch', 'meanshift', 'optics']
-    selected_model = st.selectbox("Select clustering algorithm", model_list, index=0)
-    num_clusters = st.slider("Number of clusters (for k-means/hclust)", 2, 15, 3)
-    normalize = st.checkbox("Normalize data (recommended for distance-based algorithms)", value=True)
-    eps = None
-    min_samples = None
-    if selected_model == 'dbscan':
-        eps = st.slider("Epsilon (eps) – neighbourhood radius", 0.1, 2.0, 0.5, 0.05)
-        min_samples = st.slider("Minimum samples per cluster", 2, 20, 5)
-    if st.button("🚀 Train Clustering Model", type="primary"):
-        with st.spinner(f"Training {selected_model} clustering model..."):
+    if st.button("🚀 Run AutoML Clustering", type="primary"):
+        with st.spinner("Automatically searching for best clustering algorithm and parameters..."):
             try:
-                # ✅ 仅使用 clust_setup 支持的参数
-                setup_args = {
-                    "data": df,
-                    "normalize": normalize,
-                    "session_id": 42,
-                    "verbose": False,
-                    "log_experiment": False
-                }
-                clust_setup(**setup_args)
-                st.toast("PyCaret setup complete", icon="✅")
-                if selected_model == 'dbscan':
-                    model = clust_create(selected_model, eps=eps, min_samples=min_samples)
-                else:
-                    model = clust_create(selected_model, num_clusters=num_clusters)
-                assigned = clust_assign(model)
-                cluster_labels = assigned['Cluster'].values
-                metrics_df = clust_pull()
-                silhouette = None
-                if metrics_df is not None and not metrics_df.empty:
-                    if 'Silhouette' in metrics_df.columns:
-                        silhouette = metrics_df['Silhouette'].values[0]
-                    elif 'Silhouette Score' in metrics_df.columns:
-                        silhouette = metrics_df['Silhouette Score'].values[0]
-                st.session_state.cluster_labels = cluster_labels
+                model, labels, algo_name, score, metrics = auto_clustering(numeric_df, max_clusters=10)
+                st.session_state.cluster_labels = labels
                 st.session_state.clustering_model = model
                 st.session_state.training_complete = True
                 st.session_state.training_done = True
                 st.session_state.problem_type = "Clustering"
                 st.session_state.cluster_metrics = {
-                    "algorithm": selected_model,
-                    "num_clusters": len(np.unique(cluster_labels)),
-                    "silhouette_score": silhouette,
-                    "cluster_sizes": pd.Series(cluster_labels).value_counts().to_dict()
+                    "algorithm": algo_name,
+                    "num_clusters": metrics["num_clusters"],
+                    "silhouette_score": metrics["silhouette"],
+                    "calinski_harabasz": metrics["calinski_harabasz"],
+                    "davies_bouldin": metrics["davies_bouldin"],
+                    "cluster_sizes": metrics["cluster_sizes"]
                 }
-                st.success("🎉 Clustering completed successfully!")
+                st.success(f"🎉 AutoML completed! Best algorithm: {algo_name} (Silhouette = {score:.4f})")
                 with st.expander("📊 Clustering Results", expanded=True):
-                    st.markdown("#### Model Information")
-                    st.code(str(model), language='python')
-                    if silhouette is not None:
-                        st.metric("Silhouette Score", f"{silhouette:.4f}")
-                    else:
-                        st.info("Silhouette score not available in metrics output.")
+                    st.markdown("#### Best Model")
+                    st.code(f"Algorithm: {algo_name}\nNumber of clusters: {metrics['num_clusters']}\nSilhouette Score: {score:.4f}")
                     st.markdown("#### Cluster Sizes")
-                    sizes_df = pd.DataFrame(list(st.session_state.cluster_metrics["cluster_sizes"].items()), columns=["Cluster", "Count"])
+                    sizes_df = pd.DataFrame(list(metrics["cluster_sizes"].items()), columns=["Cluster", "Count"])
                     fig = px.bar(sizes_df, x="Cluster", y="Count", title="Number of points per cluster")
                     st.plotly_chart(fig, use_container_width=True)
+                    if numeric_df.shape[1] >= 2:
+                        pca = PCA(n_components=2)
+                        pca_result = pca.fit_transform(numeric_df)
+                        pca_df = pd.DataFrame(pca_result, columns=['PC1', 'PC2'])
+                        pca_df['Cluster'] = labels.astype(str)
+                        fig2 = px.scatter(pca_df, x='PC1', y='PC2', color='Cluster', title="PCA Projection of Clusters")
+                        st.plotly_chart(fig2, use_container_width=True)
             except Exception as e:
-                st.error(f"Clustering failed: {type(e).__name__}: {str(e)}")
+                st.error(f"AutoML clustering failed: {e}")
                 st.exception(e)
 
 def training_page():
@@ -870,9 +925,9 @@ def training_page():
     if st.session_state.data is None or st.session_state.target_column is None:
         st.warning("⚠️ Please upload data and set target column first.")
         return
-    st.markdown('<h2 class="sub-header">📐 Automated Model Training (PyCaret)</h2>', unsafe_allow_html=True)
+    st.markdown('<h2 class="sub-header">📐 Automated Model Training (AutoML)</h2>', unsafe_allow_html=True)
     if not PYCARET_AVAILABLE:
-        st.warning("⚠️ PyCaret not installed. Using scikit-learn fallback.")
+        st.warning("⚠️ PyCaret not installed. Using scikit-learn fallback (RandomForest). For full AutoML, install PyCaret.")
     df = st.session_state.data.copy()
     target_col = st.session_state.target_column
     problem_type = st.session_state.problem_type
@@ -887,12 +942,12 @@ def training_page():
         return
     st.markdown(f"""
     <div class="card">
-    <h4>Training Configuration</h4>
+    <h4>AutoML Configuration</h4>
     <ul><li><strong>Problem Type:</strong> {problem_type}</li><li><strong>Target Column:</strong> {target_col}</li><li><strong>Dataset Shape:</strong> {df.shape}</li></ul>
     </div>
     """, unsafe_allow_html=True)
-    if st.button("🚀 Start Training", type="primary"):
-        with st.spinner("Training model..."):
+    if st.button("🚀 Run AutoML Training", type="primary"):
+        with st.spinner("Automatically training and comparing models..."):
             try:
                 if PYCARET_AVAILABLE:
                     if problem_type == "Classification":
@@ -918,7 +973,7 @@ def training_page():
                 st.session_state.predictions = preds
                 st.session_state.test_labels = y_true
                 st.session_state.training_complete = True
-                st.success("Training completed successfully!")
+                st.success("AutoML training completed successfully!")
             except Exception as e:
                 st.error(f"Training failed: {e}")
                 st.exception(e)
@@ -934,20 +989,15 @@ def evaluation_page():
             return
         labels = st.session_state.cluster_labels
         df = st.session_state.data.copy()
-        df['Cluster'] = labels
         numeric_df = df.select_dtypes(include=[np.number])
         if numeric_df.shape[1] >= 2:
-            try:
-                from sklearn.metrics import silhouette_score, calinski_harabasz_score, davies_bouldin_score
-                sil = silhouette_score(numeric_df, labels)
-                ch = calinski_harabasz_score(numeric_df, labels)
-                db = davies_bouldin_score(numeric_df, labels)
-                col1, col2, col3 = st.columns(3)
-                col1.metric("Silhouette Score", f"{sil:.4f}")
-                col2.metric("Calinski-Harabasz", f"{ch:.2f}")
-                col3.metric("Davies-Bouldin", f"{db:.4f}")
-            except Exception as e:
-                st.warning(f"Could not compute metrics: {e}")
+            sil = silhouette_score(numeric_df, labels)
+            ch = calinski_harabasz_score(numeric_df, labels)
+            db = davies_bouldin_score(numeric_df, labels)
+            col1, col2, col3 = st.columns(3)
+            col1.metric("Silhouette Score", f"{sil:.4f}")
+            col2.metric("Calinski-Harabasz", f"{ch:.2f}")
+            col3.metric("Davies-Bouldin", f"{db:.4f}")
         else:
             st.info("Not enough numeric columns for clustering metrics.")
         st.markdown("### Cluster Distribution")
@@ -955,14 +1005,14 @@ def evaluation_page():
         fig = px.bar(x=cluster_counts.index, y=cluster_counts.values, labels={'x':'Cluster','y':'Count'})
         st.plotly_chart(fig, use_container_width=True)
         if numeric_df.shape[1] >= 2:
-            from sklearn.decomposition import PCA
             pca = PCA(n_components=2)
             pca_result = pca.fit_transform(numeric_df)
             pca_df = pd.DataFrame(pca_result, columns=['PC1','PC2'])
             pca_df['Cluster'] = labels.astype(str)
-            fig = px.scatter(pca_df, x='PC1', y='PC2', color='Cluster', title="PCA Projection")
-            st.plotly_chart(fig, use_container_width=True)
+            fig2 = px.scatter(pca_df, x='PC1', y='PC2', color='Cluster', title="PCA Projection")
+            st.plotly_chart(fig2, use_container_width=True)
         st.markdown("### Cluster Assignments (first 100 rows)")
+        df['Cluster'] = labels
         st.dataframe(df[['Cluster'] + [c for c in df.columns if c != 'Cluster']].head(100), use_container_width=True)
         return
     # Classification / Regression evaluation
@@ -1012,6 +1062,7 @@ def export_page():
         if st.button("Show Model Details"):
             if st.session_state.problem_type == "Clustering":
                 st.write("Clustering Model:", st.session_state.clustering_model)
+                st.write("Algorithm:", st.session_state.cluster_metrics.get("algorithm", "N/A"))
             else:
                 st.write("Best Model:", st.session_state.model)
     with col2:
@@ -1030,15 +1081,17 @@ def export_page():
         dataset_shape = st.session_state.data.shape if st.session_state.data is not None else "N/A"
         feature_count = len(st.session_state.data.columns) - (1 if st.session_state.target_column else 0) if st.session_state.data is not None else "N/A"
         if st.session_state.problem_type == "Clustering":
-            report = f"""# Clustering Model Report
+            report = f"""# Clustering Model Report (AutoML)
 Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-Algorithm: {st.session_state.cluster_metrics.get('algorithm', 'N/A') if st.session_state.cluster_metrics else 'N/A'}
+Best Algorithm: {st.session_state.cluster_metrics.get('algorithm', 'N/A')}
 Dataset shape: {dataset_shape}
-Number of clusters: {st.session_state.cluster_metrics.get('num_clusters', 'N/A') if st.session_state.cluster_metrics else 'N/A'}
-Silhouette Score: {st.session_state.cluster_metrics.get('silhouette_score', 'N/A') if st.session_state.cluster_metrics else 'N/A'}
+Number of clusters: {st.session_state.cluster_metrics.get('num_clusters', 'N/A')}
+Silhouette Score: {st.session_state.cluster_metrics.get('silhouette_score', 'N/A')}
+Calinski-Harabasz: {st.session_state.cluster_metrics.get('calinski_harabasz', 'N/A')}
+Davies-Bouldin: {st.session_state.cluster_metrics.get('davies_bouldin', 'N/A')}
 """
         else:
-            report = f"""# Machine Learning Model Report
+            report = f"""# Machine Learning Model Report (AutoML)
 Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 Problem Type: {st.session_state.problem_type}
 Target Column: {st.session_state.target_column}
@@ -1109,7 +1162,7 @@ def dashboard_page():
         "data_upload": "📁 Data Upload",
         "data_cleaning": "🧹 Data Cleaning",
         "eda": "🔍 Exploratory Data Analysis",
-        "model_training": "📐 Model Training",
+        "model_training": "📐 AutoML Training",
         "model_evaluation": "📈 Model Evaluation",
         "export_results": "💾 Export Results",
         "account": "👤 Account Settings"
@@ -1124,7 +1177,7 @@ def dashboard_page():
         if selected_page != st.session_state.page:
             go_to(selected_page)
         if not PYCARET_AVAILABLE:
-            st.error("⚠️ PyCaret not installed. Install with: `pip install pycaret`")
+            st.error("⚠️ PyCaret not installed. Install with: `pip install pycaret` for full AutoML.")
         if st.button("👋🏻 Logout", type="primary"):
             st.session_state.logged_in = False
             st.session_state.user_name = ""
