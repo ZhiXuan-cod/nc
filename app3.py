@@ -577,14 +577,14 @@ def front_page():
         display: flex;
         align-items: center;
         justify-content: center;
-        max-height: 280px;   /* 调整这个值改变视频高度 */
+        max-height: 500px;   /* 调整这个值改变视频高度 */
         height: auto;
         margin: auto;
     }
     .video-container video {
         width: 100%;
         height: auto;
-        max-height: 280px;   /* 与容器一致，避免溢出 */
+        max-height: 500px;   /* 与容器一致，避免溢出 */
         object-fit: contain;
     }
     </style>
