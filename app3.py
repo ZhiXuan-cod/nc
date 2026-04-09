@@ -2,6 +2,7 @@ import streamlit as st
 import os
 import base64
 import hashlib
+import hmac  # constant-time comparison
 import pandas as pd
 import numpy as np
 from datetime import datetime
@@ -19,16 +20,24 @@ from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 from sklearn.cluster import KMeans, AgglomerativeClustering, DBSCAN, Birch
 from sklearn.decomposition import PCA
-import warnings
-warnings.filterwarnings('ignore')
 
-# ---------- Supabase import ----------
-from supabase import create_client
+# ---------- Optional warning control (removed global 'ignore') ----------
+# We now let warnings appear – they can be helpful for debugging.
+# If you want to suppress a specific category, do it explicitly.
+
+# ---------- Supabase import with fallback ----------
+try:
+    from supabase import create_client
+    SUPABASE_AVAILABLE = True
+except ImportError:
+    SUPABASE_AVAILABLE = False
+    st.warning("⚠️ Supabase not installed. Authentication will not work.")
 
 # ---------- PyCaret imports (optional) ----------
 try:
-    from pycaret.classification import setup as clf_setup, compare_models as clf_compare, predict_model as clf_predict, get_config, pull
-    from pycaret.regression import setup as reg_setup, compare_models as reg_compare, predict_model as reg_predict
+    from pycaret.classification import setup as clf_setup, compare_models as clf_compare, predict_model as clf_predict
+    from pycaret.regression import setup as reg_setup, compare_models as reg_compare, predict_model as reg_predict, get_config as reg_get_config
+    from pycaret.classification import get_config as clf_get_config
     PYCARET_AVAILABLE = True
 except ImportError:
     PYCARET_AVAILABLE = False
@@ -118,7 +127,7 @@ def text_to_simple_pdf_bytes(text: str, title: str = "ML Model Report") -> bytes
 
     return header + body + xref_bytes + trailer
 
-# ---------- Background image helper ----------
+# ---------- Background image helper (fixed MIME type) ----------
 def get_base64_of_file(file_path):
     try:
         with open(file_path, "rb") as f:
@@ -128,12 +137,15 @@ def get_base64_of_file(file_path):
         return None
 
 def set_bg_image_local(image_path):
+    """Set background image with correct MIME type based on file extension."""
     bin_str = get_base64_of_file(image_path)
     if bin_str:
+        ext = os.path.splitext(image_path)[1].lower()
+        mime = "image/png" if ext == ".png" else "image/jpeg"
         page_bg_img = f"""
         <style>
         .stApp {{
-            background-image: url("data:image/jpg;base64,{bin_str}");
+            background-image: url("data:{mime};base64,{bin_str}");
             background-size: cover;
             background-repeat: no-repeat;
             background-attachment: fixed;
@@ -151,7 +163,7 @@ def set_bg_image_local(image_path):
         """
         st.markdown(fallback_bg, unsafe_allow_html=True)
 
-# ---------- Password hashing ----------
+# ---------- Password hashing (with constant-time verification) ----------
 def hash_password(password: str, iterations: int = 100_000) -> str:
     salt = os.urandom(16)
     pwd_hash = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, iterations)
@@ -171,19 +183,24 @@ def verify_password(plain_password: str, stored_password: str) -> bool:
             salt = base64.b64decode(salt_b64.encode("utf-8"))
             expected_hash = base64.b64decode(hash_b64.encode("utf-8"))
             candidate_hash = hashlib.pbkdf2_hmac("sha256", plain_password.encode("utf-8"), salt, iterations)
-            return candidate_hash == expected_hash
+            # Constant-time comparison
+            return hmac.compare_digest(candidate_hash, expected_hash)
         except Exception:
             return False
-    return stored_password == plain_password
+    # Fallback for plaintext (not recommended, but kept for backward compatibility)
+    return hmac.compare_digest(plain_password, stored_password)
 
-# ---------- Supabase client ----------
+# ---------- Supabase client (only if available) ----------
 if "supabase" not in st.session_state:
-    try:
-        url = st.secrets["supabase"]["url"]
-        key = st.secrets["supabase"]["key"]
-        st.session_state.supabase = create_client(url, key)
-    except Exception as e:
-        st.error(f"Supabase connection failed: {e}")
+    if SUPABASE_AVAILABLE:
+        try:
+            url = st.secrets["supabase"]["url"]
+            key = st.secrets["supabase"]["key"]
+            st.session_state.supabase = create_client(url, key)
+        except Exception as e:
+            st.error(f"Supabase connection failed: {e}")
+            st.session_state.supabase = None
+    else:
         st.session_state.supabase = None
 
 def register_user(email, password, name):
@@ -214,20 +231,29 @@ def authenticate_user(email, password):
         st.error(f"Authentication failed: {e}")
         return False, None, None
 
-# ---------- Page navigation ----------
-PAGES = {
-    "front": "Front Page",
-    "login": "Login / Register",
-    "dashboard": "Dashboard",
-    "account": "Account",
-    "data_upload": "Data Upload",
-    "data_cleaning": "Data Cleaning",
-    "eda": "Exploratory Data Analysis",
-    "model_training": "Model Training",
-    "model_evaluation": "Model Evaluation",
-    "export_results": "Export Results"
-}
+# ---------- Centralized state reset for ML results ----------
+def reset_ml_state():
+    """Reset all ML-related session state keys to their defaults."""
+    defaults = {
+        "data": None,
+        "target_column": None,
+        "problem_type": None,
+        "model": None,
+        "predictions": None,
+        "test_labels": None,
+        "training_complete": False,
+        "cleaned_data": None,
+        "feature_names": None,
+        "training_done": False,
+        "cluster_labels": None,
+        "cluster_metrics": None,
+        "clustering_model": None,
+        "clustering_scaler": None,
+    }
+    for k, v in defaults.items():
+        st.session_state[k] = v
 
+# ---------- Page navigation ----------
 if "page" not in st.session_state:
     st.session_state.page = "front"
 if "logged_in" not in st.session_state:
@@ -249,7 +275,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# ---------- CSS ----------
+# ---------- CSS (version‑specific selectors may break; kept as is) ----------
 st.markdown("""
 <style>
     .main-header { font-size: 2.5rem; color: #1E88E5; text-align: center; padding: 1rem; margin-bottom: 2rem; }
@@ -287,35 +313,9 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# ---------- Session state initialisation ----------
+# ---------- Session state initialisation (already done by reset_ml_state but we call it once) ----------
 if "data" not in st.session_state:
-    st.session_state.data = None
-if "target_column" not in st.session_state:
-    st.session_state.target_column = None
-if "problem_type" not in st.session_state:
-    st.session_state.problem_type = None
-if "model" not in st.session_state:
-    st.session_state.model = None
-if "predictions" not in st.session_state:
-    st.session_state.predictions = None
-if "test_labels" not in st.session_state:
-    st.session_state.test_labels = None
-if "training_complete" not in st.session_state:
-    st.session_state.training_complete = False
-if "cleaned_data" not in st.session_state:
-    st.session_state.cleaned_data = None
-if "feature_names" not in st.session_state:
-    st.session_state.feature_names = None
-if "training_done" not in st.session_state:
-    st.session_state.training_done = False
-if "cluster_labels" not in st.session_state:
-    st.session_state.cluster_labels = None
-if "cluster_metrics" not in st.session_state:
-    st.session_state.cluster_metrics = None
-if "clustering_model" not in st.session_state:
-    st.session_state.clustering_model = None
-if "clustering_scaler" not in st.session_state:
-    st.session_state.clustering_scaler = None
+    reset_ml_state()
 
 # ---------- Cleaning helper ----------
 def apply_cleaning(df, drop_duplicates, missing_option, outlier_option,
@@ -445,7 +445,7 @@ def is_clustering_possible(df, min_rows=10, min_numeric_features=2) -> Tuple[boo
         return False, f"Constant numeric features: {', '.join(constant_cols[:3])}"
     return True, "Suitable for clustering"
 
-# ---------- AutoML for Clustering ----------
+# ---------- AutoML for Clustering (returns scaled data for visualization) ----------
 def auto_clustering(df, max_clusters=10):
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(df.select_dtypes(include=[np.number]))
@@ -536,7 +536,7 @@ def auto_clustering(df, max_clusters=10):
         "algorithm": best_name,
         "cluster_sizes": pd.Series(best_labels).value_counts().to_dict()
     }
-    return best_model, best_labels, best_name, best_score, metrics, scaler
+    return best_model, best_labels, best_name, best_score, metrics, scaler, X_scaled
 
 # ---------- Fallback training ----------
 def train_fallback_model(df, target_col, problem_type):
@@ -679,6 +679,8 @@ def upload_page():
         last_error = None
         for enc in encodings:
             try:
+                # Reset file pointer before each attempt
+                uploaded_file.seek(0)
                 df = pd.read_csv(uploaded_file, encoding=enc)
                 break
             except UnicodeDecodeError as e:
@@ -691,6 +693,8 @@ def upload_page():
         if df is None:
             st.error(f"Could not read CSV file. Last error: {last_error}")
             return
+        # New data loaded → reset ML state (preserve nothing)
+        reset_ml_state()
         st.session_state.data = df
         st.success(f"✔️ Successfully loaded {len(df)} rows and {len(df.columns)} columns")
     
@@ -739,6 +743,8 @@ def upload_page():
         if problem_type == "Clustering":
             st.info("Clustering is unsupervised – no target column required. The system will automatically select the best algorithm and number of clusters.")
             if st.button("Set Clustering Task", type="primary", key="set_clustering"):
+                reset_ml_state()  # Clear previous ML state
+                st.session_state.data = df  # restore data
                 st.session_state.target_column = None
                 st.session_state.problem_type = "Clustering"
                 st.success("✅ Clustering task selected. Proceed to Model Training for AutoML.")
@@ -757,6 +763,8 @@ def upload_page():
                 elif problem_type == "Regression" and not np.issubdtype(df[target_col].dtype, np.number):
                     st.error(f"❌ Target column '{target_col}' is not numeric. Regression requires a numeric target.")
                     return
+                reset_ml_state()  # Clear previous ML state
+                st.session_state.data = df
                 st.session_state.target_column = target_col
                 st.session_state.problem_type = problem_type
                 st.success(f"✅ Target set: {target_col} ({problem_type})")
@@ -909,7 +917,7 @@ def clustering_training_page():
     if st.button("🚀 Run AutoML Clustering", type="primary"):
         with st.spinner("Automatically searching for best clustering algorithm and parameters..."):
             try:
-                model, labels, algo_name, score, metrics, scaler = auto_clustering(numeric_df, max_clusters=10)
+                model, labels, algo_name, score, metrics, scaler, X_scaled = auto_clustering(numeric_df, max_clusters=10)
                 st.session_state.cluster_labels = labels
                 st.session_state.clustering_model = model
                 st.session_state.training_complete = True
@@ -932,13 +940,16 @@ def clustering_training_page():
                     sizes_df = pd.DataFrame(list(metrics["cluster_sizes"].items()), columns=["Cluster", "Count"])
                     fig = px.bar(sizes_df, x="Cluster", y="Count", title="Number of points per cluster")
                     st.plotly_chart(fig, use_container_width=True)
-                    if numeric_df.shape[1] >= 2:
+                    # Use scaled data for PCA visualization (consistent with training)
+                    if X_scaled.shape[1] >= 2:
                         pca = PCA(n_components=2)
-                        pca_result = pca.fit_transform(numeric_df)
+                        pca_result = pca.fit_transform(X_scaled)
                         pca_df = pd.DataFrame(pca_result, columns=['PC1', 'PC2'])
                         pca_df['Cluster'] = labels.astype(str)
-                        fig2 = px.scatter(pca_df, x='PC1', y='PC2', color='Cluster', title="PCA Projection of Clusters")
+                        fig2 = px.scatter(pca_df, x='PC1', y='PC2', color='Cluster', title="PCA Projection of Clusters (scaled data)")
                         st.plotly_chart(fig2, use_container_width=True)
+                    else:
+                        st.info("Not enough dimensions for PCA visualization.")
             except Exception as e:
                 st.error(f"AutoML clustering failed: {e}")
                 st.exception(e)
@@ -982,15 +993,17 @@ def training_page():
                         pred_df = clf_predict(best_model)
                         preds = pred_df['prediction_label'].values
                         y_true = pred_df[target_col].values
-                        st.session_state.feature_names = get_config('X_train').columns.tolist()
-                    else:
+                        # Use classification-specific get_config
+                        st.session_state.feature_names = clf_get_config('X_train').columns.tolist()
+                    else:  # Regression
                         setup_args = {"data": df, "target": target_col, "train_size": 0.8, "session_id": 42, "verbose": False, "log_experiment": False}
                         _pycaret_setup_safe(reg_setup, **setup_args)
                         best_model = reg_compare(verbose=False, sort='R2')
                         pred_df = reg_predict(best_model)
                         preds = pred_df['prediction_label'].values
                         y_true = pred_df[target_col].values
-                        st.session_state.feature_names = get_config('X_train').columns.tolist()
+                        # Use regression-specific get_config
+                        st.session_state.feature_names = reg_get_config('X_train').columns.tolist()
                     st.session_state.model = best_model
                 else:
                     model, preds, y_true = train_fallback_model(df, target_col, problem_type)
@@ -1050,8 +1063,14 @@ def evaluation_page():
         st.plotly_chart(fig, use_container_width=True)
         
         if numeric_df.shape[1] >= 2:
+            # Use scaled data for PCA if available
+            scaler = st.session_state.get("clustering_scaler")
+            if scaler is not None:
+                X_for_pca = scaler.transform(numeric_df)
+            else:
+                X_for_pca = numeric_df.values
             pca = PCA(n_components=2)
-            pca_result = pca.fit_transform(numeric_df)
+            pca_result = pca.fit_transform(X_for_pca)
             pca_df = pd.DataFrame(pca_result, columns=['PC1','PC2'])
             pca_df['Cluster'] = labels.astype(str)
             fig2 = px.scatter(pca_df, x='PC1', y='PC2', color='Cluster', title="PCA Projection")
@@ -1152,7 +1171,6 @@ Training completed: {st.session_state.training_complete}
         st.download_button("📥 Download Report (PDF)", pdf_bytes, "ml_model_report.pdf")
     
     st.markdown("### 📋 Session Information")
-    # FIX: Convert all values to strings to avoid Arrow conversion errors
     session_info = {
         "Data Loaded": str(st.session_state.data is not None),
         "Problem Type": str(st.session_state.problem_type) if st.session_state.problem_type else "N/A",
@@ -1163,9 +1181,7 @@ Training completed: {st.session_state.training_complete}
     st.dataframe(pd.DataFrame.from_dict(session_info, orient='index', columns=['Status']), width='stretch')
     
     if st.button("🔄 Start Over", type="secondary"):
-        for key in ["data", "target_column", "problem_type", "model", "predictions", "test_labels", "training_complete", "cleaned_data", "feature_names", "training_done", "cluster_labels", "cluster_metrics", "clustering_model", "clustering_scaler"]:
-            if key in st.session_state:
-                st.session_state[key] = None
+        reset_ml_state()
         go_to("data_upload")
 
 def account_page():
@@ -1233,9 +1249,7 @@ def dashboard_page():
             st.session_state.logged_in = False
             st.session_state.user_name = ""
             st.session_state.user_email = ""
-            for key in ["data", "target_column", "problem_type", "model", "predictions", "test_labels", "training_complete", "cleaned_data", "feature_names", "training_done", "cluster_labels", "cluster_metrics", "clustering_model", "clustering_scaler"]:
-                if key in st.session_state:
-                    st.session_state[key] = None
+            reset_ml_state()
             go_to("front")
     # Render page
     if st.session_state.page == "account":
