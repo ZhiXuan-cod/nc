@@ -997,7 +997,7 @@ def clustering_training_page():
                 st.exception(e)
 
 def training_page():
-    """Model training page with user-selectable speed mode."""
+    """Model training with full auto fallback – never shows an error."""
     if st.session_state.problem_type == "Clustering":
         clustering_training_page()
         return
@@ -1006,7 +1006,7 @@ def training_page():
         return
     st.markdown('<h2 class="sub-header">📐 Automated Model Training (AutoML)</h2>', unsafe_allow_html=True)
     if not PYCARET_AVAILABLE:
-        st.warning("⚠️ PyCaret not installed. Using scikit-learn fallback (RandomForest). For full AutoML, install PyCaret.")
+        st.info("PyCaret not installed. Using scikit-learn fallback (RandomForest).")
     
     df = st.session_state.data.copy()
     target_col = st.session_state.target_column
@@ -1022,12 +1022,12 @@ def training_page():
         st.error(f"Target column '{target_col}' must be numeric for regression.")
         return
     
-    # ----- User selects training speed mode -----
+    # Speed mode selection (still offered, but will auto fallback)
     train_mode = st.radio(
         "⚡ Training Speed Mode",
         options=["Fast (few seconds)", "Standard (1-2 min)", "Full (slower, best)"],
         index=1,
-        help="Fast: RandomForest only, 3-fold CV. Standard: 5 common models, 5-fold. Full: all models, 10-fold."
+        help="Fast: RandomForest only, 3‑fold. Standard: 5 models, 5‑fold. Full: all models, 10‑fold. If PyCaret fails, auto fallback to RandomForest."
     )
     
     st.markdown(f"""
@@ -1041,78 +1041,91 @@ def training_page():
     """, unsafe_allow_html=True)
     
     if st.button("🚀 Run AutoML Training", type="primary"):
-        with st.spinner("Automatically training and comparing models..."):
+        with st.spinner("Training... (auto fallback enabled)"):
             try:
-                if PYCARET_AVAILABLE:
-                    # Set parameters based on mode
-                    if train_mode == "Fast (few seconds)":
-                        fold = 3
-                        include_models = ['rf']   # RandomForest only
-                        sort_metric = 'Accuracy' if problem_type == 'Classification' else 'R2'
-                    elif train_mode == "Standard (1-2 min)":
-                        fold = 5
-                        if problem_type == "Classification":
-                            include_models = ['lr', 'rf', 'xgboost', 'lightgbm', 'dt']
-                        else:
-                            include_models = ['lr', 'rf', 'lightgbm', 'dt', 'et']
-                        sort_metric = 'Accuracy' if problem_type == 'Classification' else 'R2'
-                    else:  # Full mode
-                        fold = 10
-                        include_models = None  # all models
-                        sort_metric = 'Accuracy' if problem_type == 'Classification' else 'R2'
-                    
-                    # Common setup arguments
-                    setup_args = {
-                        "data": df,
-                        "target": target_col,
-                        "train_size": 0.8,
-                        "session_id": 42,
-                        "verbose": False,
-                        "log_experiment": False,
-                        "fold": fold,
-                        "n_jobs": -1,
-                        "html": False,
-                        "preprocess": False,
-                    }
-                    
-                    if problem_type == "Classification":
-                        _pycaret_setup_safe(clf_setup, **setup_args)
-                        best_model = clf_compare(verbose=False, sort=sort_metric, include=include_models, n_select=1, fold=fold)
-                        # Handle possible empty list or list of models
-                        if isinstance(best_model, list):
-                            if len(best_model) == 0:
-                                st.error("❌ No models were returned by compare_models. Check your data (e.g., target column has too few unique values or data is empty).")
-                                return
-                            best_model = best_model[0]
-                        pred_df = clf_predict(best_model)
-                        preds = pred_df['prediction_label'].values
-                        y_true = pred_df[target_col].values
-                        st.session_state.feature_names = clf_get_config('X_train').columns.tolist()
-                    else:  # Regression
-                        _pycaret_setup_safe(reg_setup, **setup_args)
-                        best_model = reg_compare(verbose=False, sort=sort_metric, include=include_models, n_select=1, fold=fold)
-                        if isinstance(best_model, list):
-                            if len(best_model) == 0:
-                                st.error("❌ No models were returned by compare_models. Check your data (e.g., target column is constant or data has issues).")
-                                return
-                            best_model = best_model[0]
-                        pred_df = reg_predict(best_model)
-                        preds = pred_df['prediction_label'].values
-                        y_true = pred_df[target_col].values
-                        st.session_state.feature_names = reg_get_config('X_train').columns.tolist()
-                    
-                    st.session_state.model = best_model
-                else:
-                    # Fallback: RandomForest, always fast
-                    model, preds, y_true = train_fallback_model(df, target_col, problem_type)
-                    st.session_state.model = model
+                trained = False
+                model = None
+                preds = None
+                y_true = None
                 
+                # ---- Try PyCaret first if available ----
+                if PYCARET_AVAILABLE:
+                    try:
+                        # Set parameters based on mode
+                        if train_mode == "Fast (few seconds)":
+                            fold = 3
+                            include_models = ['rf']   # RandomForest only
+                        elif train_mode == "Standard (1-2 min)":
+                            fold = 5
+                            if problem_type == "Classification":
+                                include_models = ['lr', 'rf', 'xgboost', 'lightgbm', 'dt']
+                            else:
+                                include_models = ['lr', 'rf', 'lightgbm', 'dt', 'et']
+                        else:  # Full mode
+                            fold = 10
+                            include_models = None  # all models
+                        
+                        sort_metric = 'Accuracy' if problem_type == 'Classification' else 'R2'
+                        
+                        # Setup with auto-preprocess (let PyCaret handle everything)
+                        setup_args = {
+                            "data": df,
+                            "target": target_col,
+                            "train_size": 0.8,
+                            "session_id": 42,
+                            "verbose": False,
+                            "log_experiment": False,
+                            "fold": fold,
+                            "n_jobs": -1,
+                            "html": False,
+                            "preprocess": True,   # Auto preprocessing: impute, encode, scale
+                        }
+                        
+                        if problem_type == "Classification":
+                            _pycaret_setup_safe(clf_setup, **setup_args)
+                            best_model = clf_compare(verbose=False, sort=sort_metric, include=include_models, n_select=1, fold=fold)
+                            # Unpack if list
+                            if isinstance(best_model, list):
+                                if len(best_model) == 0:
+                                    raise ValueError("compare_models returned empty list")
+                                best_model = best_model[0]
+                            pred_df = clf_predict(best_model)
+                            preds = pred_df['prediction_label'].values
+                            y_true = pred_df[target_col].values
+                            st.session_state.feature_names = clf_get_config('X_train').columns.tolist()
+                        else:  # Regression
+                            _pycaret_setup_safe(reg_setup, **setup_args)
+                            best_model = reg_compare(verbose=False, sort=sort_metric, include=include_models, n_select=1, fold=fold)
+                            if isinstance(best_model, list):
+                                if len(best_model) == 0:
+                                    raise ValueError("compare_models returned empty list")
+                                best_model = best_model[0]
+                            pred_df = reg_predict(best_model)
+                            preds = pred_df['prediction_label'].values
+                            y_true = pred_df[target_col].values
+                            st.session_state.feature_names = reg_get_config('X_train').columns.tolist()
+                        
+                        model = best_model
+                        trained = True
+                        st.success("✅ AutoML training completed with PyCaret!")
+                    except Exception as pycaret_error:
+                        st.warning(f"⚠️ PyCaret training failed: {pycaret_error}. Falling back to scikit-learn (RandomForest).")
+                        # Fall through to fallback
+                        trained = False
+                
+                # ---- Fallback to scikit-learn if PyCaret not available or failed ----
+                if not trained:
+                    model, preds, y_true = train_fallback_model(df, target_col, problem_type)
+                    st.info("ℹ️ Used scikit-learn RandomForest (fallback).")
+                
+                # Store results
+                st.session_state.model = model
                 st.session_state.predictions = preds
                 st.session_state.test_labels = y_true
                 st.session_state.training_complete = True
-                st.success("AutoML training completed successfully!")
+                st.success("Training completed successfully!")
             except Exception as e:
-                st.error(f"Training failed: {e}")
+                st.error(f"Training completely failed: {e}")
                 st.exception(e)
 
 def evaluation_page():
