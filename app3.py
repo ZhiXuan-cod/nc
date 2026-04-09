@@ -5,7 +5,7 @@ import hashlib
 import pandas as pd
 import numpy as np
 from datetime import datetime
-from typing import List
+from typing import List, Tuple
 import plotly.express as px
 import plotly.graph_objects as go
 from sklearn.preprocessing import StandardScaler, MinMaxScaler, LabelEncoder
@@ -24,7 +24,7 @@ from supabase import create_client
 try:
     from pycaret.classification import setup as clf_setup, compare_models as clf_compare, predict_model as clf_predict, get_config, pull
     from pycaret.regression import setup as reg_setup, compare_models as reg_compare, predict_model as reg_predict
-    from pycaret.clustering import setup as clust_setup, create_model as clust_create, assign_model as clust_assign, get_config as clust_get_config, pull as clust_pull
+    from pycaret.clustering import setup as clust_setup, create_model as clust_create, assign_model as clust_assign, pull as clust_pull
     PYCARET_AVAILABLE = True
     CLUSTERING_AVAILABLE = True
 except ImportError:
@@ -423,6 +423,58 @@ def _pycaret_setup_safe(setup_fn, **kwargs):
                 return _pycaret_setup_safe(setup_fn, **kwargs)
         raise
 
+# ===================== 任务可用性检测函数 =====================
+def is_classification_possible(df) -> Tuple[bool, List[str]]:
+    """
+    检测是否有至少一列适合作为分类目标。
+    返回 (是否可能, 候选列列表)
+    """
+    candidates = []
+    for col in df.columns:
+        dtype = df[col].dtype
+        unique_vals = df[col].nunique(dropna=False)
+        if dtype in ['object', 'category']:
+            candidates.append(col)
+        elif np.issubdtype(dtype, np.number):
+            if unique_vals < 20:   # 低基数数值也视为分类候选
+                candidates.append(col)
+    return len(candidates) > 0, candidates
+
+def is_regression_possible(df) -> Tuple[bool, List[str]]:
+    """
+    检测是否有至少一列适合作为回归目标（数值列且唯一值较多）。
+    返回 (是否可能, 候选列列表)
+    """
+    candidates = []
+    for col in df.columns:
+        if np.issubdtype(df[col].dtype, np.number):
+            # 数值列且不是低基数（避免分类误判）
+            if df[col].nunique(dropna=False) >= 20:
+                candidates.append(col)
+    return len(candidates) > 0, candidates
+
+def is_clustering_possible(df, min_rows=10, min_numeric_features=2) -> Tuple[bool, str]:
+    """
+    检测数据集是否适合聚类。
+    条件：
+    - 行数 >= min_rows
+    - 数值特征数量 >= min_numeric_features
+    - 每个数值特征的方差 > 0（不是常数）
+    """
+    if len(df) < min_rows:
+        return False, f"数据行数不足 {min_rows} 行（当前 {len(df)} 行）"
+    numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+    if len(numeric_cols) < min_numeric_features:
+        return False, f"数值特征不足 {min_numeric_features} 个（当前 {len(numeric_cols)} 个）"
+    # 检查常数特征
+    constant_cols = []
+    for col in numeric_cols:
+        if df[col].var() == 0:
+            constant_cols.append(col)
+    if constant_cols:
+        return False, f"存在常数数值特征: {', '.join(constant_cols[:3])}"
+    return True, "适合聚类"
+
 # ---------- Page functions ----------
 def front_page():
     set_bg_image_local("FrontPage.jpg")
@@ -516,6 +568,7 @@ def login_page():
         st.markdown('</div>')
         st.markdown('</div>')
 
+# ---------- 增强的 upload_page：动态显示可用任务 ----------
 def upload_page():
     st.markdown('<h2 class="sub-header">📁 Upload Your Dataset</h2>', unsafe_allow_html=True)
     col1, col2 = st.columns([2, 1])
@@ -555,6 +608,73 @@ def upload_page():
                 st.write("**Shape:**", df.shape)
                 col_types = pd.DataFrame({'Column': df.columns, 'Type': df.dtypes.astype(str), 'Missing Values': df.isnull().sum(), 'Unique Values': df.nunique()})
                 st.dataframe(col_types, use_container_width=True)
+
+            # ----- 检测可用任务 -----
+            classification_possible, class_candidates = is_classification_possible(df)
+            regression_possible, reg_candidates = is_regression_possible(df)
+            clustering_possible, cluster_msg = is_clustering_possible(df)
+
+            available_tasks = []
+            if classification_possible:
+                available_tasks.append("Classification")
+            if regression_possible:
+                available_tasks.append("Regression")
+            if clustering_possible:
+                available_tasks.append("Clustering")
+
+            if not available_tasks:
+                st.error("❌ 当前数据不支持任何机器学习任务（分类、回归、聚类均不适合）。请上传其他数据集。")
+                return
+
+            st.markdown("### 🎯 根据数据自动检测到的可用任务")
+            st.info(f"**✅ 可以执行的任务：** {', '.join(available_tasks)}")
+            if not classification_possible:
+                st.warning("⚠️ 分类不可用：没有适合作为分类目标的列（分类目标需要是类别型或低基数数值列）。")
+            if not regression_possible:
+                st.warning("⚠️ 回归不可用：没有适合作为回归目标的数值列（需要至少一个数值列且唯一值较多）。")
+            if not clustering_possible:
+                st.warning(f"⚠️ 聚类不可用：{cluster_msg}")
+
+            st.markdown("---")
+            st.markdown("### 📌 请选择任务类型")
+            problem_type = st.selectbox("Select problem type:", available_tasks)
+
+            if problem_type == "Clustering":
+                st.info("Clustering is unsupervised – no target column required.")
+                if st.button("Set Clustering Task", type="primary", key="set_clustering"):
+                    st.session_state.target_column = None
+                    st.session_state.problem_type = "Clustering"
+                    st.success("✅ Clustering task selected. No target column needed.")
+            else:
+                # Classification 或 Regression：显示适合的目标列
+                if problem_type == "Classification":
+                    candidates = class_candidates
+                    help_text = "选择分类目标列（类别型或低基数数值列）"
+                else:
+                    candidates = reg_candidates
+                    help_text = "选择回归目标列（连续数值列）"
+
+                if not candidates:
+                    st.error(f"❌ 尽管 {problem_type} 被检测为可能，但未找到具体候选列。请检查数据。")
+                    return
+
+                target_col = st.selectbox(f"Select target column for {problem_type}:", candidates, help=help_text)
+                if st.button("Set Target", type="primary", key="set_target"):
+                    # 额外验证
+                    if problem_type == "Classification" and df[target_col].nunique() > 50:
+                        st.warning(f"⚠️ 目标列 '{target_col}' 有 {df[target_col].nunique()} 个唯一值，分类效果可能不佳。考虑使用回归。")
+                    elif problem_type == "Regression" and not np.issubdtype(df[target_col].dtype, np.number):
+                        st.error(f"❌ 目标列 '{target_col}' 不是数值类型，无法进行回归。")
+                        return
+                    st.session_state.target_column = target_col
+                    st.session_state.problem_type = problem_type
+                    st.success(f"✅ Target set: {target_col} ({problem_type})")
+        else:
+            st.info("📂 No data loaded yet. Please upload a CSV file.")
+    with col2:
+        if st.session_state.data is not None:
+            # 显示原有候选列表（仅作参考）
+            df = st.session_state.data
             classification_candidates = []
             regression_candidates = []
             for col in df.columns:
@@ -567,41 +687,28 @@ def upload_page():
                         classification_candidates.append(col)
                     else:
                         regression_candidates.append(col)
-            st.markdown("### 🎯 Detected Target Candidates")
+            st.markdown("### 🔍 检测到的目标候选列（参考）")
             col1a, col2a = st.columns(2)
             with col1a:
-                st.markdown("**Classification Targets**")
+                st.markdown("**分类候选**")
                 if classification_candidates:
                     st.write(", ".join(classification_candidates))
                 else:
-                    st.write("None detected")
+                    st.write("无")
             with col2a:
-                st.markdown("**Regression Targets**")
+                st.markdown("**回归候选**")
                 if regression_candidates:
                     st.write(", ".join(regression_candidates))
                 else:
-                    st.write("None detected")
+                    st.write("无")
             st.markdown("---")
+            st.caption("💡 聚类要求至少2个数值特征且无常数特征。")
         else:
-            st.info("📂 No data loaded yet. Please upload a CSV file.")
-    with col2:
-        if st.session_state.data is not None:
-            st.markdown("### 📌 Define Problem Type")
-            problem_type = st.selectbox("Select problem type:", ["Classification", "Regression", "Clustering"])
-            if problem_type == "Clustering":
-                st.info("Clustering is unsupervised – no target column required.")
-                if st.button("Set Clustering Task", type="primary", key="set_clustering"):
-                    st.session_state.target_column = None
-                    st.session_state.problem_type = "Clustering"
-                    st.success("✅ Clustering task selected. No target column needed.")
-            else:
-                target_col = st.selectbox("Select the target column:", options=st.session_state.data.columns.tolist(), index=len(st.session_state.data.columns)-1)
-                if st.button("Set Target", type="primary", key="set_target"):
-                    st.session_state.target_column = target_col
-                    st.session_state.problem_type = problem_type
-                    st.success(f"✅ Target set: {target_col} ({problem_type})")
-        else:
-            st.info("Please upload data first.")
+            st.info("请先上传数据。")
+
+# ---------- 其他页面（cleaning, eda, training, evaluation, export, account）与原代码相同 ----------
+# 注意：training_page 中的 clustering_training_page 已经修正（无 ignore_low_variance）
+# 下面给出完整的 clustering_training_page 和其他函数（保持原样，仅确保参数正确）
 
 def cleaning_page():
     if st.session_state.data is None:
@@ -748,7 +855,7 @@ def clustering_training_page():
     if st.button("🚀 Train Clustering Model", type="primary"):
         with st.spinner(f"Training {selected_model} clustering model..."):
             try:
-                # ✅ FIX: removed 'ignore_low_variance' and 'html' – they are not accepted by clust_setup
+                # ✅ 仅使用 clust_setup 支持的参数
                 setup_args = {
                     "data": df,
                     "normalize": normalize,
