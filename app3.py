@@ -245,7 +245,7 @@ def go_to(page: str):
 st.set_page_config(
     page_title="No-Code ML Platform",
     page_icon="💻",
-    layout="wide",                      # full width layout
+    layout="wide",
     initial_sidebar_state="collapsed"
 )
 
@@ -314,6 +314,8 @@ if "cluster_metrics" not in st.session_state:
     st.session_state.cluster_metrics = None
 if "clustering_model" not in st.session_state:
     st.session_state.clustering_model = None
+if "clustering_scaler" not in st.session_state:
+    st.session_state.clustering_scaler = None   # ADDED for consistent scaling
 
 # ---------- Cleaning helper ----------
 def apply_cleaning(df, drop_duplicates, missing_option, outlier_option,
@@ -443,7 +445,7 @@ def is_clustering_possible(df, min_rows=10, min_numeric_features=2) -> Tuple[boo
         return False, f"Constant numeric features: {', '.join(constant_cols[:3])}"
     return True, "Suitable for clustering"
 
-# ---------- AutoML for Clustering ----------
+# ---------- AutoML for Clustering (UPDATED: returns scaler) ----------
 def auto_clustering(df, max_clusters=10):
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(df.select_dtypes(include=[np.number]))
@@ -534,7 +536,7 @@ def auto_clustering(df, max_clusters=10):
         "algorithm": best_name,
         "cluster_sizes": pd.Series(best_labels).value_counts().to_dict()
     }
-    return best_model, best_labels, best_name, best_score, metrics
+    return best_model, best_labels, best_name, best_score, metrics, scaler   # <-- scaler added
 
 # ---------- Fallback training ----------
 def train_fallback_model(df, target_col, problem_type):
@@ -567,24 +569,23 @@ def front_page():
         box-shadow: 0 4px 20px rgba(0,0,0,0.5);
         animation: fadeIn 1s ease-in-out;
         color: white;
-        height: 100%;  /* 保持右侧 panel 填满列高 */
+        height: 100%;
     }
     .right-panel h1 { text-shadow: 2px 2px 4px rgba(0,0,0,0.5); font-size: 3rem; margin-bottom: 1rem; }
     .right-panel p { text-shadow: 1px 1px 2px rgba(0,0,0,0.5); font-size: 1.2rem; opacity: 0.9; }
     @keyframes fadeIn { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
-    /* 视频容器：限制最大高度，垂直居中 */
     .video-container {
         display: flex;
         align-items: center;
         justify-content: center;
-        max-height: 400px;   /* 调整这个值改变视频高度 */
+        max-height: 400px;
         height: auto;
         margin: auto;
     }
     .video-container video {
         width: 100%;
         height: auto;
-        max-height: 400px;   /* 与容器一致，避免溢出 */
+        max-height: 400px;
         object-fit: contain;
     }
     </style>
@@ -671,7 +672,6 @@ def login_page():
 def upload_page():
     st.markdown('<h2 class="sub-header">📁 Upload Your Dataset</h2>', unsafe_allow_html=True)
     
-    # ----- 1. File upload (full width) -----
     uploaded_file = st.file_uploader("Choose a CSV file", type=['csv'])
     if uploaded_file is not None:
         encodings = ['utf-8', 'latin1', 'iso-8859-1', 'cp1252']
@@ -697,7 +697,6 @@ def upload_page():
     if st.session_state.data is not None:
         df = st.session_state.data
         
-        # ----- Detect suitable tasks -----
         class_possible, class_candidates = is_classification_possible(df)
         reg_possible, reg_candidates = is_regression_possible(df)
         clust_possible, clust_msg = is_clustering_possible(df)
@@ -710,17 +709,14 @@ def upload_page():
         if clust_possible:
             available_tasks.append("Clustering")
         
-        # ----- 2. 🎯 Auto‑detected Task Suggestion (bullet list) -----
         st.markdown("### 🎯 Auto‑detected Task Suggestion")
         if available_tasks:
-            # Build a bullet list of all suitable tasks
             bullet_list = "\n".join([f"- ✅ **{task}**" for task in available_tasks])
             st.info(f"**This dataset is suitable for:**\n{bullet_list}")
         else:
             st.error("❌ No machine learning task is possible with this dataset. Please upload another CSV.")
             return
         
-        # ----- 3. 🔍 Detected Target Candidates -----
         st.markdown("### 🔍 Detected Target Candidates")
         col1a, col2a = st.columns(2)
         with col1a:
@@ -737,7 +733,6 @@ def upload_page():
                 st.write("None detected")
         st.markdown("---")
         
-        # ----- 4. 📌 Define Problem Type (only suitable tasks shown) -----
         st.markdown("### 📌 Define Problem Type")
         problem_type = st.selectbox("Select problem type:", available_tasks)
         
@@ -767,12 +762,9 @@ def upload_page():
                 st.success(f"✅ Target set: {target_col} ({problem_type})")
         
         st.markdown("---")
-        
-        # ----- 5. Data Preview (moved to bottom, full width) -----
         st.markdown("### Data Preview")
         st.dataframe(df.head(), use_container_width=True)
         
-        # ----- 6. Basic Data Statistics (collapsible, at bottom) -----
         with st.expander("📊 Basic Data Statistics"):
             st.write("**Shape:**", df.shape)
             col_types = pd.DataFrame({
@@ -917,7 +909,7 @@ def clustering_training_page():
     if st.button("🚀 Run AutoML Clustering", type="primary"):
         with st.spinner("Automatically searching for best clustering algorithm and parameters..."):
             try:
-                model, labels, algo_name, score, metrics = auto_clustering(numeric_df, max_clusters=10)
+                model, labels, algo_name, score, metrics, scaler = auto_clustering(numeric_df, max_clusters=10)
                 st.session_state.cluster_labels = labels
                 st.session_state.clustering_model = model
                 st.session_state.training_complete = True
@@ -931,6 +923,7 @@ def clustering_training_page():
                     "davies_bouldin": metrics["davies_bouldin"],
                     "cluster_sizes": metrics["cluster_sizes"]
                 }
+                st.session_state.clustering_scaler = scaler   # store scaler
                 st.success(f"🎉 AutoML completed! Best algorithm: {algo_name} (Silhouette = {score:.4f})")
                 with st.expander("📊 Clustering Results", expanded=True):
                     st.markdown("#### Best Model")
@@ -1014,28 +1007,52 @@ def evaluation_page():
     if not st.session_state.training_complete:
         st.warning("⚠️ No trained model found. Please go to 'Model Training' and train a model first.")
         return
+    
     if st.session_state.problem_type == "Clustering":
         st.markdown('<h2 class="sub-header">📈 Clustering Performance Evaluation</h2>', unsafe_allow_html=True)
         if st.session_state.cluster_labels is None:
             st.error("No clustering labels found.")
             return
+        
         labels = st.session_state.cluster_labels
         df = st.session_state.data.copy()
         numeric_df = df.select_dtypes(include=[np.number])
-        if numeric_df.shape[1] >= 2:
-            sil = silhouette_score(numeric_df, labels)
-            ch = calinski_harabasz_score(numeric_df, labels)
-            db = davies_bouldin_score(numeric_df, labels)
+        
+        if numeric_df.shape[1] < 2:
+            st.info("Not enough numeric columns for clustering metrics.")
+        else:
+            # Use the same scaler that was used during training
+            scaler = st.session_state.get("clustering_scaler")
+            if scaler is not None:
+                X_scaled = scaler.transform(numeric_df)
+            else:
+                # Fallback (should not happen if training was done)
+                st.warning("Scaler not found, recomputing metrics on raw data (may be inaccurate).")
+                X_scaled = numeric_df.values
+            
+            # Compute metrics on scaled data
+            sil = silhouette_score(X_scaled, labels)
+            ch = calinski_harabasz_score(X_scaled, labels)
+            db = davies_bouldin_score(X_scaled, labels)
+            
             col1, col2, col3 = st.columns(3)
             col1.metric("Silhouette Score", f"{sil:.4f}")
             col2.metric("Calinski-Harabasz", f"{ch:.2f}")
             col3.metric("Davies-Bouldin", f"{db:.4f}")
-        else:
-            st.info("Not enough numeric columns for clustering metrics.")
+            
+            # Also show the stored metrics from training (for reference)
+            if st.session_state.cluster_metrics:
+                with st.expander("📋 Training-time Metrics (AutoML selection)"):
+                    st.write(f"**Algorithm chosen:** {st.session_state.cluster_metrics['algorithm']}")
+                    st.write(f"**Silhouette (training):** {st.session_state.cluster_metrics['silhouette_score']:.4f}")
+                    st.write(f"**Calinski-Harabasz:** {st.session_state.cluster_metrics['calinski_harabasz']:.2f}")
+                    st.write(f"**Davies-Bouldin:** {st.session_state.cluster_metrics['davies_bouldin']:.4f}")
+        
         st.markdown("### Cluster Distribution")
         cluster_counts = pd.Series(labels).value_counts().sort_index()
         fig = px.bar(x=cluster_counts.index, y=cluster_counts.values, labels={'x':'Cluster','y':'Count'})
         st.plotly_chart(fig, use_container_width=True)
+        
         if numeric_df.shape[1] >= 2:
             pca = PCA(n_components=2)
             pca_result = pca.fit_transform(numeric_df)
@@ -1043,15 +1060,19 @@ def evaluation_page():
             pca_df['Cluster'] = labels.astype(str)
             fig2 = px.scatter(pca_df, x='PC1', y='PC2', color='Cluster', title="PCA Projection")
             st.plotly_chart(fig2, use_container_width=True)
+        
         st.markdown("### Cluster Assignments (first 100 rows)")
-        df['Cluster'] = labels
-        st.dataframe(df[['Cluster'] + [c for c in df.columns if c != 'Cluster']].head(100), use_container_width=True)
+        df_with_cluster = df.copy()
+        df_with_cluster['Cluster'] = labels
+        st.dataframe(df_with_cluster[['Cluster'] + [c for c in df_with_cluster.columns if c != 'Cluster']].head(100), use_container_width=True)
         return
+    
     # Classification / Regression evaluation
     st.markdown('<h2 class="sub-header">📈 Model Performance Evaluation</h2>', unsafe_allow_html=True)
     preds = st.session_state.predictions
     y_true = st.session_state.test_labels
     problem = st.session_state.problem_type
+    
     if problem == "Classification":
         acc = accuracy_score(y_true, preds)
         prec = precision_score(y_true, preds, average='weighted', zero_division=0)
@@ -1094,7 +1115,7 @@ def export_page():
         if st.button("Show Model Details"):
             if st.session_state.problem_type == "Clustering":
                 st.write("Clustering Model:", st.session_state.clustering_model)
-                st.write("Algorithm:", st.session_state.cluster_metrics.get("algorithm", "N/A"))
+                st.write("Algorithm:", st.session_state.cluster_metrics.get("algorithm", "N/A") if st.session_state.cluster_metrics else "N/A")
             else:
                 st.write("Best Model:", st.session_state.model)
     with col2:
@@ -1111,16 +1132,15 @@ def export_page():
     st.markdown("#### 📄 Model Report")
     if st.button("Generate Model Report"):
         dataset_shape = st.session_state.data.shape if st.session_state.data is not None else "N/A"
-        feature_count = len(st.session_state.data.columns) - (1 if st.session_state.target_column else 0) if st.session_state.data is not None else "N/A"
         if st.session_state.problem_type == "Clustering":
             report = f"""# Clustering Model Report (AutoML)
 Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-Best Algorithm: {st.session_state.cluster_metrics.get('algorithm', 'N/A')}
+Best Algorithm: {st.session_state.cluster_metrics.get('algorithm', 'N/A') if st.session_state.cluster_metrics else 'N/A'}
 Dataset shape: {dataset_shape}
-Number of clusters: {st.session_state.cluster_metrics.get('num_clusters', 'N/A')}
-Silhouette Score: {st.session_state.cluster_metrics.get('silhouette_score', 'N/A')}
-Calinski-Harabasz: {st.session_state.cluster_metrics.get('calinski_harabasz', 'N/A')}
-Davies-Bouldin: {st.session_state.cluster_metrics.get('davies_bouldin', 'N/A')}
+Number of clusters: {st.session_state.cluster_metrics.get('num_clusters', 'N/A') if st.session_state.cluster_metrics else 'N/A'}
+Silhouette Score: {st.session_state.cluster_metrics.get('silhouette_score', 'N/A') if st.session_state.cluster_metrics else 'N/A'}
+Calinski-Harabasz: {st.session_state.cluster_metrics.get('calinski_harabasz', 'N/A') if st.session_state.cluster_metrics else 'N/A'}
+Davies-Bouldin: {st.session_state.cluster_metrics.get('davies_bouldin', 'N/A') if st.session_state.cluster_metrics else 'N/A'}
 """
         else:
             report = f"""# Machine Learning Model Report (AutoML)
@@ -1144,7 +1164,7 @@ Training completed: {st.session_state.training_complete}
     }
     st.dataframe(pd.DataFrame.from_dict(session_info, orient='index', columns=['Status']), use_container_width=True)
     if st.button("🔄 Start Over", type="secondary"):
-        for key in ["data", "target_column", "problem_type", "model", "predictions", "test_labels", "training_complete", "cleaned_data", "feature_names", "training_done", "cluster_labels", "cluster_metrics", "clustering_model"]:
+        for key in ["data", "target_column", "problem_type", "model", "predictions", "test_labels", "training_complete", "cleaned_data", "feature_names", "training_done", "cluster_labels", "cluster_metrics", "clustering_model", "clustering_scaler"]:
             if key in st.session_state:
                 st.session_state[key] = None
         go_to("data_upload")
@@ -1214,7 +1234,7 @@ def dashboard_page():
             st.session_state.logged_in = False
             st.session_state.user_name = ""
             st.session_state.user_email = ""
-            for key in ["data", "target_column", "problem_type", "model", "predictions", "test_labels", "training_complete", "cleaned_data", "feature_names", "training_done", "cluster_labels", "cluster_metrics", "clustering_model"]:
+            for key in ["data", "target_column", "problem_type", "model", "predictions", "test_labels", "training_complete", "cleaned_data", "feature_names", "training_done", "cluster_labels", "cluster_metrics", "clustering_model", "clustering_scaler"]:
                 if key in st.session_state:
                     st.session_state[key] = None
             go_to("front")
